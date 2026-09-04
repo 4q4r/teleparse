@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"teleparse/internal/webproxy"
 
 	"github.com/gotd/td/mtproxy"
 	"github.com/gotd/td/telegram/dcs"
@@ -15,7 +16,7 @@ import (
 
 // ParseProxyURL turns a proxy URL into a gotd DC resolver. An empty string
 // yields the default direct resolver. Supported schemes: socks5, socks4, http,
-// mtproto; webproxy is reserved for phase 7.
+// mtproto and webproxy.
 //
 //nolint:ireturn // the resolver abstraction is exactly what telegram.Options needs.
 func ParseProxyURL(raw string) (dcs.Resolver, error) {
@@ -42,10 +43,58 @@ func ParseProxyURL(raw string) (dcs.Resolver, error) {
 	case "mtproto":
 		return mtProtoResolver(parsed)
 	case "webproxy":
-		return nil, fmt.Errorf("%q: %w", raw, ErrWebProxyNotWired)
+		return webProxyResolver(parsed)
 	default:
 		return nil, fmt.Errorf("%q: %w", raw, ErrBadProxyScheme)
 	}
+}
+
+// webProxyResolver validates webproxy://host[:port]/SECRET?carrier=auto|websocket|https
+// and returns the WEB-proxy carrier resolver; the session bootstraps lazily
+// on first dial, so construction performs no network I/O.
+//
+//nolint:ireturn // the resolver abstraction is exactly what telegram.Options needs.
+func webProxyResolver(parsed *url.URL) (dcs.Resolver, error) {
+	encoded := strings.TrimPrefix(parsed.Path, "/")
+	if encoded == "" {
+		return nil, fmt.Errorf("%q: %w: missing secret", parsed.String(), ErrBadProxySecret)
+	}
+
+	secret, err := hex.DecodeString(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("%q: %w: %w", encoded, ErrBadProxySecret, err)
+	}
+
+	mode, err := carrierMode(parsed.Query().Get("carrier"))
+	if err != nil {
+		return nil, fmt.Errorf("%q: %w", parsed.String(), err)
+	}
+
+	resolver, err := webproxy.NewResolver(webproxy.Config{
+		Host:        parsed.Host,
+		Secret:      secret,
+		CarrierMode: mode,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("webproxy %s: %w: %w", parsed.Host, ErrBadProxySecret, err)
+	}
+
+	return resolver, nil
+}
+
+// carrierMode maps the carrier query parameter onto webproxy.CarrierMode;
+// the empty value selects auto.
+func carrierMode(raw string) (webproxy.CarrierMode, error) {
+	if raw == "" {
+		return webproxy.ModeAuto, nil
+	}
+
+	mode := webproxy.CarrierMode(raw)
+	if mode != webproxy.ModeAuto && !mode.Offered() {
+		return "", fmt.Errorf("carrier %q: %w (want auto|websocket|https)", raw, ErrBadProxyURL)
+	}
+
+	return mode, nil
 }
 
 // plainResolver wraps a dial function into the plain TCP resolver.

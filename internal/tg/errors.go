@@ -13,7 +13,7 @@ var (
 	ErrBadProxyURL       = errors.New("cannot parse proxy URL")
 	ErrBadProxyScheme    = errors.New("unsupported proxy scheme (want socks5:// socks4:// http:// mtproto:// webproxy://)")
 	ErrBadProxySecret    = errors.New("invalid mtproto secret")
-	ErrWebProxyNotWired  = errors.New("webproxy:// resolver is wired in phase 7")
+	ErrWebProxyNotWired  = errors.New("webproxy:// resolver is not wired")
 	ErrProxyRefused      = errors.New("proxy refused connection")
 	ErrBadPhone          = errors.New("phone must be in +E.164 format, e.g. +15551234567")
 	ErrSignUpUnsupported = errors.New("sign up is not supported; log in with an existing account")
