@@ -20,6 +20,8 @@ type regexSet struct {
 	senderUsername *regexp.Regexp
 	senderPhone    *regexp.Regexp
 	name           *regexp.Regexp
+	text           *regexp.Regexp
+	url            *regexp.Regexp
 }
 
 type fileBounds struct {
@@ -61,11 +63,26 @@ func Compile(opts *Options) (*Plan, error) {
 		return nil, fmt.Errorf("%w: %w", ErrCompile, err)
 	}
 
+	datePreds, err := datePredicates(opts)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrCompile, err)
+	}
+
+	fwdPreds, err := forwardPredicates(opts)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrCompile, err)
+	}
+
 	plan := &Plan{Pushdown: push}
 	plan.Predicates = append(plan.Predicates, chatPredicates(opts, set)...)
 	plan.Predicates = append(plan.Predicates, senderPredicates(opts, set)...)
 	plan.Predicates = append(plan.Predicates, mediaPredicates(opts)...)
 	plan.Predicates = append(plan.Predicates, filePreds...)
+	plan.Predicates = append(plan.Predicates, textPredicates(opts, set)...)
+	plan.Predicates = append(plan.Predicates, datePreds...)
+	plan.Predicates = append(plan.Predicates, fwdPreds...)
+	plan.Predicates = append(plan.Predicates, engagementPredicates(opts)...)
+	plan.Predicates = append(plan.Predicates, miscPredicates(opts)...)
 	plan.ExplainLines = explainLines(opts, push)
 
 	return plan, nil
@@ -214,6 +231,8 @@ func compileRegexes(opts *Options) (regexSet, error) {
 		{"sender_username_regex", opts.SenderUsernameRegex, &set.senderUsername},
 		{"sender_phone_regex", opts.SenderPhoneRegex, &set.senderPhone},
 		{"name_regex", opts.NameRegex, &set.name},
+		{"text_regex", opts.TextRegex, &set.text},
+		{"url_regex", opts.URLRegex, &set.url},
 	}
 
 	for _, field := range fields {
@@ -407,12 +426,18 @@ func senderMatches(entries []string, ctx *Context) bool {
 }
 
 func senderMatchesEntry(entry string, ctx *Context) bool {
+	return matchIDOrHandle(entry, ctx.Sender.ID, ctx.Sender.Username)
+}
+
+// matchIDOrHandle reports whether entry equals the decimal id or matches the
+// username case-insensitively, ignoring a leading "@" on either side.
+func matchIDOrHandle(entry string, id int64, username string) bool {
 	needle := strings.TrimPrefix(entry, "@")
-	if strconv.FormatInt(ctx.Sender.ID, 10) == needle {
+	if strconv.FormatInt(id, 10) == needle {
 		return true
 	}
 
-	return strings.EqualFold(strings.TrimPrefix(ctx.Sender.Username, "@"), needle)
+	return strings.EqualFold(strings.TrimPrefix(username, "@"), needle)
 }
 
 func mediaPredicates(opts *Options) []NamedPredicate {
@@ -700,6 +725,39 @@ func explainLines(opts *Options, push Pushdown) []string {
 		{on: opts.MinMP > 0, line: "client: min_mp=" + strconv.FormatFloat(opts.MinMP, 'f', -1, 64)},
 		{on: opts.Streamable.IsSet(), line: "client: streamable=" + opts.Streamable.String()},
 		{on: opts.NoSound.IsSet(), line: "client: no_sound=" + opts.NoSound.String()},
+		{on: opts.TextRegex != "", line: "client: text_regex=" + opts.TextRegex},
+		{on: opts.HasText != "", line: "client: has_text=" + opts.HasText},
+		{on: len(opts.Hashtag) > 0, line: "client: hashtag=" + strings.Join(opts.Hashtag, ",")},
+		{on: opts.AnyHashtag, line: "client: any_hashtag=true"},
+		{on: len(opts.Mention) > 0, line: "client: mention=" + strings.Join(opts.Mention, ",")},
+		{on: opts.WasMentioned.IsSet(), line: "client: was_mentioned=" + opts.WasMentioned.String()},
+		{on: opts.HasURL.IsSet(), line: "client: has_url=" + opts.HasURL.String()},
+		{on: opts.URLRegex != "", line: "client: url_regex=" + opts.URLRegex},
+		{on: opts.HasEmail, line: "client: has_email=true"},
+		{on: opts.HasPhone, line: "client: has_phone=true"},
+		{on: opts.Command != "", line: "client: command=" + opts.Command},
+		{on: opts.EmojiOnly, line: "client: emoji_only=true"},
+		{on: opts.After != "", line: "client: after=" + opts.After},
+		{on: opts.Before != "", line: "client: before=" + opts.Before},
+		{on: opts.Last != "", line: "client: last=" + opts.Last},
+		{on: opts.OlderThan != "", line: "client: older_than=" + opts.OlderThan},
+		{on: opts.Edited.IsSet(), line: "client: edited=" + opts.Edited.String()},
+		{on: opts.Forwarded.IsSet(), line: "client: forwarded=" + opts.Forwarded.String()},
+		{on: len(opts.FwdFrom) > 0, line: "client: fwd_from=" + strings.Join(opts.FwdFrom, ",")},
+		{on: opts.FwdHidden.IsSet(), line: "client: fwd_hidden=" + opts.FwdHidden.String()},
+		{on: opts.FwdDateAfter != "", line: "client: fwd_date_after=" + opts.FwdDateAfter},
+		{on: opts.FwdDateBefore != "", line: "client: fwd_date_before=" + opts.FwdDateBefore},
+		{on: opts.IsReply.IsSet(), line: "client: is_reply=" + opts.IsReply.String()},
+		{on: opts.MinViews > 0, line: "client: min_views=" + strconv.FormatInt(opts.MinViews, 10)},
+		{on: opts.MinForwards > 0, line: "client: min_forwards=" + strconv.FormatInt(opts.MinForwards, 10)},
+		{on: opts.MinReactions > 0, line: "client: min_reactions=" + strconv.Itoa(opts.MinReactions)},
+		{on: len(opts.Reaction) > 0, line: "client: reaction=" + strings.Join(opts.Reaction, ",")},
+		{on: opts.Pinned.IsSet(), line: "client: pinned=" + opts.Pinned.String()},
+		{on: opts.MinID > 0, line: "client: min_id=" + strconv.FormatInt(opts.MinID, 10)},
+		{on: opts.MaxID > 0, line: "client: max_id=" + strconv.FormatInt(opts.MaxID, 10)},
+		{on: opts.Service == "only" || opts.Service == "exclude", line: "client: service=" + opts.Service},
+		{on: opts.Silent.IsSet(), line: "client: silent=" + opts.Silent.String()},
+		{on: opts.HasSpoiler.IsSet(), line: "client: has_spoiler=" + opts.HasSpoiler.String()},
 	}
 
 	lines := make([]string, 0, len(rows)+len(push.Notes)+1)
@@ -711,6 +769,7 @@ func explainLines(opts *Options, push Pushdown) []string {
 	}
 
 	lines = append(lines, push.Notes...)
+	lines = append(lines, clientNotes(opts)...)
 
 	if executionConstrained(opts) {
 		lines = append(lines, executionNote)
