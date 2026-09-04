@@ -11,12 +11,15 @@ type Context struct {
 }
 
 // Chat describes the chat a message belongs to. Type is one of private, bot,
-// group, supergroup, channel or forum.
+// group, supergroup, channel or forum. Deleted marks user peers whose account
+// was deleted; it stays false for group and channel peers, where the concept
+// does not apply.
 type Chat struct {
 	ID                         int64
 	Type                       string
 	Title, Username            string
 	Archived, Protected, Saved bool
+	Deleted                    bool
 }
 
 // Sender describes the message author. Present is false when the sender is

@@ -88,12 +88,14 @@ type Recursion struct {
 // Field groups map 1:1 to CLI flag families and TOML keys.
 type Options struct {
 	// --- chat scope ---
-	ChatType     []string `toml:"chat_type"     flag:"chat-type"     usage:"chat types: private,group,supergroup,channel,forum (comma list)"`
-	ChatGlob     string   `toml:"chat_glob"     flag:"chat-glob"     usage:"glob over chat titles, e.g. 'News*'"`
-	ChatRegex    string   `toml:"chat_regex"    flag:"chat-regex"    usage:"regex over chat titles"`
-	Archived     string   `toml:"archived"      flag:"archived"      usage:"archived chats: only|exclude|any"`
-	SavedOnly    bool     `toml:"saved_only"    flag:"saved"         usage:"scan Saved Messages only"`
-	ChatUsername string   `toml:"chat_username" flag:"chat-username" usage:"exact chat @username"`
+	ChatType        []string `toml:"chat_type"        flag:"chat-type"        usage:"chat types: private,group,supergroup,channel,forum (comma list)"`
+	ExcludeChatType []string `toml:"exclude_chat_type" flag:"exclude-chat-type" usage:"chat types to skip (comma list); overrides --chat-type matches"`
+	ChatGlob        string   `toml:"chat_glob"        flag:"chat-glob"        usage:"glob over chat titles, e.g. 'News*'"`
+	ChatRegex       string   `toml:"chat_regex"       flag:"chat-regex"       usage:"regex over chat titles"`
+	Archived        string   `toml:"archived"         flag:"archived"         usage:"archived chats: only|exclude|any"`
+	SavedOnly       bool     `toml:"saved_only"       flag:"saved"            usage:"scan Saved Messages only"`
+	ChatUsername    string   `toml:"chat_username"    flag:"chat-username"    usage:"exact chat @username"`
+	ChatDeleted     TriBool  `toml:"chat_deleted"     flag:"chat-deleted"     usage:"chats whose peer is a deleted account (true|false)"`
 
 	// --- sender ---
 	ContactsOnly        bool     `toml:"contacts_only"        flag:"sender-contacts"       usage:"only messages from users in my contacts"`
@@ -106,19 +108,24 @@ type Options struct {
 	SenderVerified      TriBool  `toml:"sender_verified"      flag:"sender-verified"       usage:"verified senders (true|false)"`
 	SenderScam          TriBool  `toml:"sender_scam"          flag:"sender-scam"           usage:"flagged-scam senders (true|false)"`
 	SenderDeleted       TriBool  `toml:"sender_deleted"       flag:"sender-deleted"        usage:"deleted accounts (true|false)"`
-	SenderNameRegex     string   `toml:"sender_name_regex"    flag:"sender-name-regex"     usage:"regex over sender display name"`
+	SenderNonContacts   bool     `toml:"sender_non_contacts"   flag:"sender-non-contacts"   usage:"only senders NOT in my contacts"`
+	SenderNonMutual     bool     `toml:"sender_non_mutual"     flag:"sender-non-mutual"     usage:"only senders who are NOT mutual contacts"`
+	SenderNameRegex     string   `toml:"sender_name_regex"     flag:"sender-name-regex"     usage:"regex over sender display name"`
 	SenderUsernameRegex string   `toml:"sender_username_regex" flag:"sender-username-regex" usage:"regex over sender @username"`
 	SenderPhoneRegex    string   `toml:"sender_phone_regex"   flag:"sender-phone-regex"    usage:"regex over sender phone (contacts only)"`
 
 	// --- media type ---
-	Media       []string `toml:"media"        flag:"media"        usage:"media types: photo,video,video-note,voice,audio,document,sticker,gif (comma list)"`
-	StickerKind []string `toml:"sticker_kind" flag:"sticker-kind" usage:"sticker kinds: static,animated,video"`
-	HasMedia    TriBool  `toml:"has_media"    flag:"has-media"    usage:"any media attached (true|false)"`
-	InAlbum     string   `toml:"in_album"     flag:"in-album"     usage:"album membership: any|only|first"`
+	Media        []string `toml:"media"         flag:"media"         usage:"media types: photo,video,video-note,voice,audio,document,sticker,gif (comma list)"`
+	ExcludeMedia []string `toml:"exclude_media" flag:"exclude-media" usage:"media kinds to skip (comma list); overrides --media matches"`
+	StickerKind  []string `toml:"sticker_kind"  flag:"sticker-kind"  usage:"sticker kinds: static,animated,video"`
+	HasMedia     TriBool  `toml:"has_media"     flag:"has-media"     usage:"any media attached (true|false)"`
+	InAlbum      string   `toml:"in_album"      flag:"in-album"      usage:"album membership: any|only|first"`
 
 	// --- file metadata (all checkable before download) ---
 	Mime        []string `toml:"mime"         flag:"mime"         usage:"MIME globs, e.g. application/zip,video/* (comma list)"`
+	ExcludeMime []string `toml:"exclude_mime" flag:"exclude-mime" usage:"MIME globs to skip, e.g. image/* (comma list); overrides --mime matches"`
 	Ext         []string `toml:"ext"          flag:"ext"          usage:"extensions with dot, e.g. .zip,.rar (comma list)"`
+	ExcludeExt  []string `toml:"exclude_ext"  flag:"exclude-ext"  usage:"extensions to skip with dot (comma list); overrides --ext matches"`
 	NameGlob    string   `toml:"name_glob"    flag:"name"         usage:"filename glob, e.g. '*.zip'"`
 	NameRegex   string   `toml:"name_regex"   flag:"name-regex"   usage:"filename regex"`
 	MinSize     string   `toml:"min_size"     flag:"min-size"     usage:"min file size, e.g. 10MB"`
@@ -229,7 +236,9 @@ func (o *Options) Validate() error {
 		allowed []string
 	}{
 		{"media", o.Media, mediaKinds()},
+		{"exclude-media", o.ExcludeMedia, mediaKinds()},
 		{"chat-type", o.ChatType, chatTypes()},
+		{"exclude-chat-type", o.ExcludeChatType, chatTypes()},
 		{"sticker-kind", o.StickerKind, stickerKinds()},
 		{"albums", []string{o.Recursion.Albums}, modeList("albums")},
 		{"archived", []string{o.Archived}, modeList("archived")},

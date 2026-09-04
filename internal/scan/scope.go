@@ -235,19 +235,23 @@ func (r *ScopeResolver) contactIDs(ctx context.Context) (map[int64]bool, error) 
 // chatPrefilter holds the client-side chat constraints applied while
 // expanding the "all" spec.
 type chatPrefilter struct {
-	chatType []string
-	archived string
-	glob     string
-	regex    *regexp.Regexp
-	username string
+	chatType        []string
+	excludeChatType []string
+	chatDeleted     filters.TriBool
+	archived        string
+	glob            string
+	regex           *regexp.Regexp
+	username        string
 }
 
 func newChatPrefilter(opts filters.Options) (chatPrefilter, error) {
 	prefilter := chatPrefilter{
-		chatType: opts.ChatType,
-		archived: opts.Archived,
-		glob:     opts.ChatGlob,
-		username: strings.TrimPrefix(strings.ToLower(opts.ChatUsername), "@"),
+		chatType:        opts.ChatType,
+		excludeChatType: opts.ExcludeChatType,
+		chatDeleted:     opts.ChatDeleted,
+		archived:        opts.Archived,
+		glob:            opts.ChatGlob,
+		username:        strings.TrimPrefix(strings.ToLower(opts.ChatUsername), "@"),
 	}
 
 	if opts.ChatRegex != "" {
@@ -262,9 +266,21 @@ func newChatPrefilter(opts filters.Options) (chatPrefilter, error) {
 	return prefilter, nil
 }
 
+// excluded reports whether the exclude filters drop this chat: a listed
+// exclude-chat-type or a chat-deleted tri mismatch.
+func (p chatPrefilter) excluded(chat filters.Chat) bool {
+	if len(p.excludeChatType) > 0 && containsString(p.excludeChatType, chat.Type) {
+		return true
+	}
+
+	return p.chatDeleted.IsSet() && chat.Deleted != p.chatDeleted.Value()
+}
+
 func (p chatPrefilter) allows(chat filters.Chat, contacts map[int64]bool) bool {
 	switch {
 	case len(p.chatType) > 0 && !containsString(p.chatType, chat.Type):
+		return false
+	case p.excluded(chat):
 		return false
 	case p.archived == "only" && !chat.Archived:
 		return false

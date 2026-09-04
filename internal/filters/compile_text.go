@@ -91,11 +91,42 @@ func textPredicates(opts *Options, set regexSet) []NamedPredicate {
 
 // clientNotes documents client-side matcher caveats for --explain.
 func clientNotes(opts *Options) []string {
-	if !opts.EmojiOnly {
-		return nil
+	var notes []string
+
+	if len(opts.ExcludeMedia) > 0 || len(opts.ExcludeMime) > 0 ||
+		len(opts.ExcludeExt) > 0 || len(opts.ExcludeChatType) > 0 {
+		notes = append(notes, "exclude-*: a match on both include and exclude is excluded")
 	}
 
-	return []string{"emoji-only: code/pre entity ranges are not excluded from the letter scan"}
+	if len(opts.ExcludeMedia) > 0 && len(opts.Media) > 0 {
+		notes = append(notes, "exclude-media overrides media matches")
+	}
+
+	if len(opts.ExcludeMime) > 0 && len(opts.Mime) > 0 {
+		notes = append(notes, "exclude-mime overrides mime matches")
+	}
+
+	if len(opts.ExcludeExt) > 0 && len(opts.Ext) > 0 {
+		notes = append(notes, "exclude-ext overrides ext matches")
+	}
+
+	if len(opts.ExcludeChatType) > 0 && len(opts.ChatType) > 0 {
+		notes = append(notes, "exclude-chat-type overrides chat-type matches")
+	}
+
+	if opts.ChatDeleted.IsSet() {
+		notes = append(notes, "chat-deleted: group and channel peers never count as deleted")
+	}
+
+	if opts.SenderNonContacts || opts.SenderNonMutual {
+		notes = append(notes, "sender-non-*: messages without a sender (anonymous channel posts) never match")
+	}
+
+	if opts.EmojiOnly {
+		notes = append(notes, "emoji-only: code/pre entity ranges are not excluded from the letter scan")
+	}
+
+	return notes
 }
 
 func hasTextMatches(mode string, ctx *Context) bool {
