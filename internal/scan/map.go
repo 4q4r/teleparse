@@ -107,6 +107,7 @@ func MapDialogChat(dialog *tg.Dialog, entities peer.Entities) (filters.Chat, boo
 		chat.ID = user.ID
 		chat.Title = strings.TrimSpace(user.FirstName + " " + user.LastName)
 		chat.Username = user.Username
+		chat.Deleted = user.Deleted
 
 		if user.Bot {
 			chat.Type = chatBot
