@@ -331,6 +331,11 @@ func (m *matchEmitter) flush() error {
 // feedQuery adapts FeedRequest onto the gotd iterator Query seam, issuing raw
 // messages.getHistory, messages.search or messages.getReplies calls with full
 // control over the id, date and filter parameters.
+//
+// core.telegram.org/api/offsets: the effective offset is
+// offsetFromID(offset_id) + add_offset, so AddOffset<0 shifts the window
+// toward NEWER messages; gotd's iterator owns that sign while walking
+// newest-to-oldest, and min_id/max_id filter ids strictly greater/less.
 type feedQuery struct {
 	api WalkAPI
 	req FeedRequest

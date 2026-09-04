@@ -53,9 +53,10 @@ func profileCmd(app *App) *cobra.Command {
 
 func profileSaveCmd(app *App) *cobra.Command {
 	return &cobra.Command{
-		Use:   "save NAME",
-		Short: "Save current [filters] defaults as named profile",
-		Args:  cobra.ExactArgs(1),
+		Use:     "save NAME",
+		Short:   "Save current [filters] defaults as named profile",
+		Example: "  teleparse profile save photos-only",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			if err := validProfileName(name); err != nil {
@@ -77,8 +78,9 @@ func profileSaveCmd(app *App) *cobra.Command {
 
 func profileListCmd(app *App) *cobra.Command {
 	return &cobra.Command{
-		Use:   "list",
-		Short: "List profiles",
+		Use:     "list",
+		Short:   "List profiles",
+		Example: "  teleparse profile list",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if len(app.cfg.Profiles) == 0 {
 				return printLine(cmd, "no profiles — create one: teleparse profile save NAME")
@@ -96,9 +98,10 @@ func profileListCmd(app *App) *cobra.Command {
 
 func profileShowCmd(app *App) *cobra.Command {
 	return &cobra.Command{
-		Use:   "show NAME",
-		Short: "Show profile filters",
-		Args:  cobra.ExactArgs(1),
+		Use:     "show NAME",
+		Short:   "Show profile filters",
+		Example: "  teleparse profile show photos-only",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			prof, err := app.cfg.Profile(args[0])
 			if err != nil {
@@ -116,9 +119,10 @@ func profileShowCmd(app *App) *cobra.Command {
 
 func profileRmCmd(app *App) *cobra.Command {
 	return &cobra.Command{
-		Use:   "rm NAME",
-		Short: "Remove profile",
-		Args:  cobra.ExactArgs(1),
+		Use:     "rm NAME",
+		Short:   "Remove profile",
+		Example: "  teleparse profile rm photos-only",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			if _, ok := app.cfg.Profiles[name]; !ok {

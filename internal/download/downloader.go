@@ -432,6 +432,8 @@ func (m *Manager) handleFailure(runCtx, bookCtx context.Context, runID string, s
 func (m *Manager) handleFloodOrRefetch(runCtx, bookCtx context.Context, runID string, state *runState,
 	item store.MediaItem, err error, attempt int, resolved Resolved, location *tg.InputFileLocationClass,
 ) bool {
+	// FLOOD_WAIT_%d (code 420, core.telegram.org/api/errors): d is the
+	// server-mandated pause in seconds — account-bound, never IP-bound.
 	if wait, ok := tgerr.AsFloodWait(err); ok {
 		seconds := int(wait.Seconds())
 		m.pacer.ReportFlood(seconds)
@@ -445,6 +447,9 @@ func (m *Manager) handleFloodOrRefetch(runCtx, bookCtx context.Context, runID st
 		return false
 	}
 
+	// FILE_REFERENCE_EXPIRED: file references expire server-side; refetch the
+	// source message (messages.getMessages / channels.getMessages) to mint a
+	// fresh reference and retry the same transfer.
 	if tgerr.Is(err, tg.ErrFileReferenceExpired) && resolved.Refetch != nil {
 		if fresh, refetchErr := resolved.Refetch(runCtx); refetchErr == nil {
 			*location = fresh

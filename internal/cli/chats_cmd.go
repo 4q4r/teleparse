@@ -34,8 +34,9 @@ func chatsListCmd(app *App) *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "list",
-		Short: "List dialogs (all chats this account can see)",
+		Use:     "list",
+		Short:   "List dialogs (all chats this account can see)",
+		Example: "  teleparse chats list --type channel,forum\n  teleparse chats list --json",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			wanted := map[string]bool{}
 			for _, chatType := range types {
@@ -70,9 +71,10 @@ func chatsListCmd(app *App) *cobra.Command {
 
 func chatsShowCmd(app *App) *cobra.Command {
 	return &cobra.Command{
-		Use:   "show CHAT",
-		Short: "Show chat metadata",
-		Args:  cobra.ExactArgs(1),
+		Use:     "show CHAT",
+		Short:   "Show chat metadata",
+		Example: "  teleparse chats show @durov\n  teleparse chats show 123456789",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref := args[0]
 
@@ -94,6 +96,10 @@ func chatsShowCmd(app *App) *cobra.Command {
 				return nil
 			})
 			if err != nil {
+				if errors.Is(err, tg.ErrChatNotFound) {
+					return fail(cmd, fmt.Errorf("%w\n  run `teleparse chats list` to see the ids you can use", err))
+				}
+
 				return fail(cmd, err)
 			}
 

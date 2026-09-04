@@ -14,8 +14,12 @@ import (
 // runsListLimit caps the default `runs list` output.
 const runsListLimit = 50
 
-// cleanOlderThanDefault drives `runs clean` when no duration is given.
-const cleanOlderThanDefault = 7 * 24 * time.Hour
+// cleanOlderThanFlagDefault and cleanOlderThanDefault drive `runs clean`:
+// the flag text default and its duration form must stay in sync (168h == 7d).
+const (
+	cleanOlderThanFlagDefault = "168h"
+	cleanOlderThanDefault     = 7 * 24 * time.Hour
+)
 
 // dataDirPerm is the state-directory permission.
 const dataDirPerm = 0o700
@@ -30,25 +34,28 @@ func runsCmd(app *App) *cobra.Command {
 
 	cmd.AddCommand(
 		&cobra.Command{
-			Use:   "list",
-			Short: "List runs",
-			Args:  cobra.NoArgs,
-			RunE:  func(c *cobra.Command, _ []string) error { return runsList(app, c) },
+			Use:     "list",
+			Short:   "List runs",
+			Example: "  teleparse runs list",
+			Args:    cobra.NoArgs,
+			RunE:    func(c *cobra.Command, _ []string) error { return runsList(app, c) },
 		},
 		&cobra.Command{
-			Use:   "show RUN_ID",
-			Short: "Show run details",
-			Args:  cobra.ExactArgs(1),
-			RunE:  func(c *cobra.Command, args []string) error { return runsShow(app, c, args[0]) },
+			Use:     "show RUN_ID",
+			Short:   "Show run details",
+			Example: "  teleparse runs show run-20260904-101010-abcd1234",
+			Args:    cobra.ExactArgs(1),
+			RunE:    func(c *cobra.Command, args []string) error { return runsShow(app, c, args[0]) },
 		},
 		&cobra.Command{
-			Use:   "clean",
-			Short: "Delete finished runs from index",
-			Args:  cobra.NoArgs,
-			RunE:  func(c *cobra.Command, _ []string) error { return runsClean(app, c, olderThan) },
+			Use:     "clean",
+			Short:   "Delete finished runs from index",
+			Example: "  teleparse runs clean --older-than 720h",
+			Args:    cobra.NoArgs,
+			RunE:    func(c *cobra.Command, _ []string) error { return runsClean(app, c, olderThan) },
 		},
 	)
-	cmd.PersistentFlags().StringVar(&olderThan, "older-than", "168h",
+	cmd.PersistentFlags().StringVar(&olderThan, "older-than", cleanOlderThanFlagDefault,
 		"clean finished runs older than this duration (e.g. 168h)")
 
 	return cmd
