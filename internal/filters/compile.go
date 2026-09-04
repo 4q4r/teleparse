@@ -426,18 +426,42 @@ func senderMatches(entries []string, ctx *Context) bool {
 }
 
 func senderMatchesEntry(entry string, ctx *Context) bool {
-	return matchIDOrHandle(entry, ctx.Sender.ID, ctx.Sender.Username)
+	return matchIDHandleOrPhone(entry, ctx.Sender.ID, ctx.Sender.Username, ctx.Sender.Phone)
 }
 
-// matchIDOrHandle reports whether entry equals the decimal id or matches the
-// username case-insensitively, ignoring a leading "@" on either side.
-func matchIDOrHandle(entry string, id int64, username string) bool {
+// matchIDHandleOrPhone reports whether entry equals the decimal id, matches
+// the username case-insensitively (ignoring a leading "@" on either side),
+// or repeats the phone number's exact digit sequence. Phone entries must
+// carry full international digits: "+", spaces and dashes are tolerated on
+// either side, but no country-code guessing happens, so "8999…" never
+// matches "+7999…". Phones resolve only when the account sees them
+// (contacts or permissive privacy), so an empty stored phone never matches.
+func matchIDHandleOrPhone(entry string, id int64, username, phone string) bool {
 	needle := strings.TrimPrefix(entry, "@")
 	if strconv.FormatInt(id, 10) == needle {
 		return true
 	}
 
-	return strings.EqualFold(strings.TrimPrefix(username, "@"), needle)
+	if strings.EqualFold(strings.TrimPrefix(username, "@"), needle) {
+		return true
+	}
+
+	entryDigits := digitsOnly(entry)
+	phoneDigits := digitsOnly(phone)
+
+	return entryDigits != "" && phoneDigits != "" && entryDigits == phoneDigits
+}
+
+// digitsOnly strips everything but ASCII digits, so phone spellings that
+// differ only in "+", spaces or dashes compare by their bare digit sequence.
+func digitsOnly(value string) string {
+	return strings.Map(func(r rune) rune {
+		if strings.ContainsRune("0123456789", r) {
+			return r
+		}
+
+		return -1
+	}, value)
 }
 
 func mediaPredicates(opts *Options) []NamedPredicate {

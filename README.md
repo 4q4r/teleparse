@@ -130,7 +130,7 @@ Families (AND-composed; every flag has a config-key twin):
 | Forwards | `--forwarded` · `--fwd-from @channel` · `--fwd-hidden` · `--fwd-date-from/to` |
 | Engagement | `--is-reply` · `--min-views` · `--min-forwards` · `--min-reactions` · `--reaction 🔥` · `--pinned` |
 | Chat | `--chat-type private,group,supergroup,channel,forum` · `--chat-glob 'News*'` · `--chat-regex` · `--archived only` · `--saved` · `--chat-username` · `--skip-protected` |
-| Sender | `--sender-contacts` · `--sender-mutual` · `--from-me` · `--from @user,123` · `--exclude` · `--sender-bot/premium/verified/scam/deleted` · `--sender-name-regex` |
+| Sender | `--sender-contacts` · `--sender-mutual` · `--from-me` · `--from @user,123,+15551234567` (ids \| @usernames \| phone numbers) · `--exclude` (same syntax) · `--sender-bot/premium/verified/scam/deleted` · `--sender-name-regex` |
 | IDs & misc | `--min-id/--max-id` · `--service only` · `--silent` · `--spoiler` |
 | Execution | `--limit` (scan budget) · `--reverse` · `--dedupe unique-id\|hash\|off` · `--skip-existing` · `--recurse-topics` · `--follow-replies N` · `--albums expand\|first\|skip` |
 

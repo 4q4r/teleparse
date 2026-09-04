@@ -28,6 +28,9 @@ func TestCompileSenderPredicates(t *testing.T) {
 	phoneCtx := baseContext()
 	phoneCtx.Sender.Phone = "+79001234567"
 
+	spacedPhoneCtx := baseContext()
+	spacedPhoneCtx.Sender.Phone = "+7 999 123-45-67"
+
 	runPredicateCases(t, []predCase{
 		{
 			name: "contacts only matches contact",
@@ -93,6 +96,61 @@ func TestCompileSenderPredicates(t *testing.T) {
 			name: "exclude users keeps unlisted sender",
 			set:  func(o *filters.Options) { o.ExcludeUsers = []string{"20"} },
 			ctx:  otherUserCtx, want: true,
+		},
+		{
+			name: "from users matches exact phone digits",
+			set:  func(o *filters.Options) { o.FromUsers = []string{"+79001234567"} },
+			ctx:  phoneCtx, want: true,
+		},
+		{
+			name: "from users matches phone entry with tolerated separators",
+			set:  func(o *filters.Options) { o.FromUsers = []string{"+7 900 123-45-67"} },
+			ctx:  phoneCtx, want: true,
+		},
+		{
+			name: "from users matches bare digits against stored formatted phone",
+			set:  func(o *filters.Options) { o.FromUsers = []string{"79991234567"} },
+			ctx:  spacedPhoneCtx, want: true,
+		},
+		{
+			name: "from users phone entry without country code never matches",
+			set:  func(o *filters.Options) { o.FromUsers = []string{"89991234567"} },
+			ctx:  phoneCtx, want: false,
+		},
+		{
+			name: "from users national phone entry never matches international digits",
+			set:  func(o *filters.Options) { o.FromUsers = []string{"89991234567"} },
+			ctx:  spacedPhoneCtx, want: false,
+		},
+		{
+			name: "from users phone entry with different digit count never matches",
+			set:  func(o *filters.Options) { o.FromUsers = []string{"7900123456"} },
+			ctx:  phoneCtx, want: false,
+		},
+		{
+			name: "from users mixed list matches any of id username phone",
+			set:  func(o *filters.Options) { o.FromUsers = []string{"999", "@carol", "+79001234567"} },
+			ctx:  phoneCtx, want: true,
+		},
+		{
+			name: "from users phone entry never matches empty phone sender",
+			set:  func(o *filters.Options) { o.FromUsers = []string{"+79001234567"} },
+			ctx:  baseContext(), want: false,
+		},
+		{
+			name: "from users id still matches when phone set",
+			set:  func(o *filters.Options) { o.FromUsers = []string{"20"} },
+			ctx:  phoneCtx, want: true,
+		},
+		{
+			name: "exclude users skips listed phone",
+			set:  func(o *filters.Options) { o.ExcludeUsers = []string{"+79001234567"} },
+			ctx:  phoneCtx, want: false,
+		},
+		{
+			name: "exclude users keeps sender with other phone",
+			set:  func(o *filters.Options) { o.ExcludeUsers = []string{"+79110000000"} },
+			ctx:  phoneCtx, want: true,
 		},
 		{
 			name: "sender name regex matches prefix",

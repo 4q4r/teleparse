@@ -64,7 +64,9 @@ func fwdFromMatches(entries []string, ctx *Context) bool {
 	}
 
 	for _, entry := range entries {
-		if matchIDOrHandle(entry, ctx.Message.Forward.FromID, ctx.Message.Forward.FromUsername) {
+		// Forward headers never expose phone numbers, so origin matching
+		// stays id/username; phone entries simply do not resolve here.
+		if matchIDHandleOrPhone(entry, ctx.Message.Forward.FromID, ctx.Message.Forward.FromUsername, "") {
 			return true
 		}
 	}
