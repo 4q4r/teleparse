@@ -99,6 +99,9 @@ func authLoginCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "login",
 		Short: "Interactive login: phone, code, optional 2FA password",
+		Example: "  teleparse auth login\n" +
+			"  teleparse auth login --phone +15551234567\n" +
+			"  teleparse auth login --import-telethon old.session.sqlite",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			account := app.cfg.Auth.Account
 
@@ -132,8 +135,9 @@ func authLoginCmd(app *App) *cobra.Command {
 
 func authLogoutCmd(app *App) *cobra.Command {
 	return &cobra.Command{
-		Use:   "logout",
-		Short: "Log out and delete the local session",
+		Use:     "logout",
+		Short:   "Log out and delete the local session",
+		Example: "  teleparse auth logout --account work",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			account := app.cfg.Auth.Account
 
@@ -148,8 +152,9 @@ func authLogoutCmd(app *App) *cobra.Command {
 
 func authStatusCmd(app *App) *cobra.Command {
 	return &cobra.Command{
-		Use:   "status",
-		Short: "Show who am I, session age, DC",
+		Use:     "status",
+		Short:   "Show who am I, session age, DC",
+		Example: "  teleparse auth status --account work",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			account := app.cfg.Auth.Account
 
@@ -201,8 +206,9 @@ func authStatusCmd(app *App) *cobra.Command {
 
 func authListCmd(app *App) *cobra.Command {
 	return &cobra.Command{
-		Use:   "list",
-		Short: "List known local sessions",
+		Use:     "list",
+		Short:   "List known local sessions",
+		Example: "  teleparse auth list",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			names, err := tg.NewAccountManager(app.paths.AccountsDir).List()
 			if err != nil {
@@ -232,8 +238,9 @@ func authListCmd(app *App) *cobra.Command {
 
 func authExportCmd(app *App) *cobra.Command {
 	return &cobra.Command{
-		Use:   "export",
-		Short: "Export the raw session JSON (treat as a secret)",
+		Use:     "export",
+		Short:   "Export the raw session JSON (treat as a secret)",
+		Example: "  teleparse auth export > session.json",
 		Long: "Export the stored session as JSON. NOTE: a portable string-session\n" +
 			"format (--string) is not available: gotd/contrib v0.25.0 ships no encoder\n" +
 			"(session.TelethonSession decodes only).",

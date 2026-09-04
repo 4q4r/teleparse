@@ -45,9 +45,10 @@ func exportSub(app *App, name string, run func(*cobra.Command, *store.Store, int
 	)
 
 	cmd := &cobra.Command{
-		Use:   name,
-		Short: "Export manifest as " + name,
-		Args:  cobra.NoArgs,
+		Use:     name,
+		Short:   "Export manifest as " + name,
+		Example: "  teleparse export " + name + " --chat 123456789 --out manifest." + name,
+		Args:    cobra.NoArgs,
 		RunE: func(sub *cobra.Command, _ []string) error {
 			if runID != "" {
 				return fail(sub, fmt.Errorf("--run %s: %w", runID, errRunFilterUnsupported))

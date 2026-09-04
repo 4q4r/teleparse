@@ -27,11 +27,12 @@ import (
 	"github.com/spf13/pflag"
 )
 
-// runIDTimeFormat and runIDSaltBytes shape generated run ids.
+// runIDTimeFormat and runIDSaltBytes shape generated run ids; progressEvery
+// tunes the periodic stderr progress line (every N settled outcomes).
 const (
 	runIDTimeFormat = "20060102-150405"
 	runIDSaltBytes  = 4
-	progressEvery   = 10
+	progressEvery   = 25
 )
 
 // dlRunFlags carries the dl-command knobs beyond the filter surface.
@@ -72,7 +73,10 @@ func dlCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "dl [CHATS]...",
 		Short: "Download media matching filters (CHATS: all | @user | link | id | saved | glob)",
-		Args:  cobra.ArbitraryArgs,
+		Example: "  teleparse dl @durov --media photo --min-size 1MB\n" +
+			"  teleparse dl all --chat-type channel --last 7d --dry-run\n" +
+			"  teleparse dl saved --takeout",
+		Args: cobra.ArbitraryArgs,
 		RunE: func(c *cobra.Command, args []string) error {
 			return runDownloadCommand(app, c, args, &filterSet, flags, runMode{
 				dryRun:    flags.dryRun,
@@ -98,9 +102,10 @@ func scanCmd(app *App) *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "scan [CHATS]...",
-		Short: "Preview what dl would fetch (dry-run): plan + manifest rows, no downloads",
-		Args:  cobra.ArbitraryArgs,
+		Use:     "scan [CHATS]...",
+		Short:   "Preview what dl would fetch (dry-run): plan + manifest rows, no downloads",
+		Example: "  teleparse scan @durov --media video --count-only\n  teleparse scan all --chat-glob 'News*' --explain",
+		Args:    cobra.ArbitraryArgs,
 		RunE: func(c *cobra.Command, args []string) error {
 			return runDownloadCommand(app, c, args, &filterSet, flags, runMode{dryRun: true}, "")
 		},
@@ -369,6 +374,8 @@ func downloadRun(ctx context.Context, cmd *cobra.Command, state *store.Store, ap
 
 	reporter.SetPhase("downloading")
 
+	started := time.Now()
+
 	res, err := mgr.Run(ctx, runID)
 	if err != nil {
 		return finishRunE(ctx, state, runID, err)
@@ -383,7 +390,7 @@ func downloadRun(ctx context.Context, cmd *cobra.Command, state *store.Store, ap
 		return err
 	}
 
-	if err := printSummary(cmd, res); err != nil {
+	if err := printSummary(cmd, res, time.Since(started)); err != nil {
 		return err
 	}
 
@@ -647,9 +654,10 @@ func printCounts(cmd *cobra.Command, collector *walkCollector, targets []scan.Ta
 	return flushWriter(writer, cmd)
 }
 
-func printSummary(cmd *cobra.Command, res download.Result) error {
-	return printLine(cmd, "downloaded: %d (%s), skipped: %d, failed: %d\n",
-		res.Downloaded, humanBytes(res.Bytes), res.Skipped, res.Failed)
+// printSummary renders the final one-line dl/sync outcome.
+func printSummary(cmd *cobra.Command, res download.Result, took time.Duration) error {
+	return printLine(cmd, "downloaded: %d (%s), skipped: %d, failed: %d, took %s\n",
+		res.Downloaded, humanBytes(res.Bytes), res.Skipped, res.Failed, took.Round(time.Second))
 }
 
 func countFor(collector *walkCollector, chatID int64) int {

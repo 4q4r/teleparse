@@ -21,22 +21,30 @@ const (
 	doctorFilePerm = 0o600
 )
 
-// Sentinel errors wrapped by dynamic doctor messages.
-var (
-	errDoctorFailed = errors.New("one or more doctor checks failed")
-	errLowDiskSpace = errors.New("less than 100 MiB free under the downloads root")
-)
+// minFreeMiB renders minFreeBytes for messages so the threshold lives in
+// exactly one place.
+const minFreeMiB = minFreeBytes >> 20
 
-// doctorCheck is one PASS/FAIL line.
+// Sentinel errors wrapped by dynamic doctor messages.
+var errDoctorFailed = errors.New("one or more doctor checks failed")
+
+// errLowDiskSpace reports the free-bytes floor; the threshold itself is
+// rendered from minFreeBytes at the call site.
+var errLowDiskSpace = fmt.Errorf("less than %d MiB free under the downloads root", minFreeMiB)
+
+// doctorCheck is one PASS/FAIL line; hint carries the FAIL suggestion.
 type doctorCheck struct {
 	name string
 	err  error
+	hint string
 }
 
 func doctorCmd(app *App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "doctor",
 		Short: "Check config, API credentials, session, disk, database",
+		Example: "  teleparse doctor\n" +
+			"  teleparse doctor --config /path/to/config.toml",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			checks := []func() doctorCheck{
 				checkAPICreds,
@@ -44,6 +52,11 @@ func doctorCmd(app *App) *cobra.Command {
 				func() doctorCheck { return checkWritable("state db dir", filepath.Dir(app.paths.StateDB)) },
 				func() doctorCheck { return checkDownloads(app.paths.Downloads) },
 				func() doctorCheck { return checkProxy(app.cfg.Net.Proxy) },
+			}
+
+			if err := printLine(cmd, "config:  %s\naccounts: %s\n",
+				configPath(cmd), app.paths.AccountsDir); err != nil {
+				return fail(cmd, err)
 			}
 
 			failed := 0
@@ -55,6 +68,12 @@ func doctorCmd(app *App) *cobra.Command {
 
 					if err := printLine(cmd, "FAIL %s: %v\n", result.name, result.err); err != nil {
 						return fail(cmd, err)
+					}
+
+					if result.hint != "" {
+						if err := printLine(cmd, "     fix: %s\n", result.hint); err != nil {
+							return fail(cmd, err)
+						}
 					}
 
 					continue
@@ -76,7 +95,10 @@ func doctorCmd(app *App) *cobra.Command {
 
 func checkAPICreds() doctorCheck {
 	if _, _, err := tg.CredsFromEnv(); err != nil {
-		return doctorCheck{name: "api credentials", err: err}
+		return doctorCheck{
+			name: "api credentials", err: err,
+			hint: "export TELEPARSE_API_ID=... TELEPARSE_API_HASH=... (create them at https://my.telegram.org)",
+		}
 	}
 
 	return doctorCheck{name: "api credentials"}
@@ -84,13 +106,19 @@ func checkAPICreds() doctorCheck {
 
 func checkWritable(name, dir string) doctorCheck {
 	if err := os.MkdirAll(dir, doctorDirPerm); err != nil {
-		return doctorCheck{name: name, err: fmt.Errorf("create %s: %w", dir, err)}
+		return doctorCheck{
+			name: name, err: fmt.Errorf("create %s: %w", dir, err),
+			hint: "check ownership and permissions of the parent directory",
+		}
 	}
 
 	probe := filepath.Join(dir, ".teleparse-doctor")
 
 	if err := os.WriteFile(probe, nil, doctorFilePerm); err != nil {
-		return doctorCheck{name: name, err: fmt.Errorf("write %s: %w", probe, err)}
+		return doctorCheck{
+			name: name, err: fmt.Errorf("write %s: %w", probe, err),
+			hint: "check filesystem permissions (or free space if the disk is full)",
+		}
 	}
 
 	if err := os.Remove(probe); err != nil {
@@ -102,7 +130,10 @@ func checkWritable(name, dir string) doctorCheck {
 
 func checkDownloads(root string) doctorCheck {
 	if err := os.MkdirAll(root, doctorDirPerm); err != nil {
-		return doctorCheck{name: "downloads root", err: fmt.Errorf("create %s: %w", root, err)}
+		return doctorCheck{
+			name: "downloads root", err: fmt.Errorf("create %s: %w", root, err),
+			hint: "check ownership and permissions of the parent directory",
+		}
 	}
 
 	var stats syscall.Statfs_t
@@ -117,7 +148,10 @@ func checkDownloads(root string) doctorCheck {
 	}
 
 	if free < minFreeBytes {
-		return doctorCheck{name: "downloads root", err: fmt.Errorf("%d bytes: %w", free, errLowDiskSpace)}
+		return doctorCheck{
+			name: "downloads root", err: fmt.Errorf("%d bytes: %w", free, errLowDiskSpace),
+			hint: "free up space or point output.root at a larger volume",
+		}
 	}
 
 	if err := checkWritable("downloads root", root).err; err != nil {
@@ -136,7 +170,10 @@ func checkProxy(proxyURL string) doctorCheck {
 	defer cancel()
 
 	if _, err := tg.ProbeProxy(ctx, proxyURL); err != nil {
-		return doctorCheck{name: "proxy " + proxyURL, err: err}
+		return doctorCheck{
+			name: "proxy " + proxyURL, err: err,
+			hint: "verify the proxy is reachable, or clear net.proxy / --proxy to go direct",
+		}
 	}
 
 	return doctorCheck{name: "proxy " + proxyURL}

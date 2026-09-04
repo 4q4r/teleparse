@@ -35,9 +35,10 @@ func resumeCmd(app *App) *cobra.Command {
 	var all bool
 
 	cmd := &cobra.Command{
-		Use:   "resume [RUN_ID]",
-		Short: "Resume parked (FloodWait) or crashed runs",
-		Args:  cobra.MaximumNArgs(1),
+		Use:     "resume [RUN_ID]",
+		Short:   "Resume parked (FloodWait) or crashed runs",
+		Example: "  teleparse resume\n  teleparse resume run-20260904-101010-abcd1234\n  teleparse resume --all",
+		Args:    cobra.MaximumNArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
 			return runResume(app, c, args, all)
 		},

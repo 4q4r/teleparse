@@ -21,8 +21,9 @@ func proxyCmd(app *App) *cobra.Command {
 
 	cmd.AddCommand(
 		&cobra.Command{
-			Use:   "show",
-			Short: "Print effective proxy settings",
+			Use:     "show",
+			Short:   "Print effective proxy settings",
+			Example: "  teleparse proxy show",
 			RunE: func(cmd *cobra.Command, _ []string) error {
 				proxy := app.cfg.Net.Proxy
 				if proxy == "" {
@@ -33,9 +34,10 @@ func proxyCmd(app *App) *cobra.Command {
 			},
 		},
 		&cobra.Command{
-			Use:   "test [URL]",
-			Short: "Probe proxy connectivity to Telegram DCs",
-			Args:  cobra.MaximumNArgs(1),
+			Use:     "test [URL]",
+			Short:   "Probe proxy connectivity to Telegram DCs",
+			Example: "  teleparse proxy test\n  teleparse proxy test socks5://127.0.0.1:1080",
+			Args:    cobra.MaximumNArgs(1),
 			RunE: func(cmd *cobra.Command, args []string) error {
 				proxyURL := app.cfg.Net.Proxy
 				if len(args) == 1 {
