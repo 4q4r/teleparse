@@ -34,6 +34,7 @@ func decodeTOML(text string, cfg *Config) error {
 	if err := dec.Decode(cfg); err != nil {
 		return fmt.Errorf("%w: %w", ErrDecodeTOML, err)
 	}
+
 	if cfg.Profiles == nil {
 		cfg.Profiles = map[string]Filters{}
 	}
