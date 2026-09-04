@@ -8,9 +8,10 @@ func syncCmd(app *App) *cobra.Command {
 	var filterSet filterFlags
 
 	cmd := &cobra.Command{
-		Use:   "sync [CHATS]...",
-		Short: "Incremental sync: only messages past per-chat watermarks",
-		Args:  cobra.ArbitraryArgs,
+		Use:     "sync [CHATS]...",
+		Short:   "Incremental sync: only messages past per-chat watermarks",
+		Example: "  teleparse sync @durov\n  teleparse sync all --chat-type channel",
+		Args:    cobra.ArbitraryArgs,
 		RunE: func(c *cobra.Command, args []string) error {
 			return runDownloadCommand(app, c, args, &filterSet, dlRunFlags{}, runMode{syncMode: true}, "")
 		},

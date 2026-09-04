@@ -12,9 +12,10 @@ func statsCmd(app *App) *cobra.Command {
 	var chatID int64
 
 	cmd := &cobra.Command{
-		Use:   "stats",
-		Short: "Download statistics per chat and totals",
-		Args:  cobra.NoArgs,
+		Use:     "stats",
+		Short:   "Download statistics per chat and totals",
+		Example: "  teleparse stats\n  teleparse stats --chat 123456789",
+		Args:    cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
 			return runStats(app, c, chatID)
 		},
