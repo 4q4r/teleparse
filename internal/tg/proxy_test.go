@@ -97,10 +97,41 @@ func TestParseProxyURLMalformed(t *testing.T) {
 	}
 }
 
-func TestParseProxyURLWebProxyNotWired(t *testing.T) {
+func TestParseProxyURLWebProxy(t *testing.T) {
 	t.Parallel()
 
-	_, err := tg.ParseProxyURL("webproxy://relay.example/secret?carrier=websocket")
-	require.ErrorIs(t, err, tg.ErrWebProxyNotWired)
-	assert.NotContains(t, err.Error(), "panic")
+	// Construction validates the secret offline; the carrier session
+	// bootstraps lazily on first dial, so no network I/O happens here.
+	for _, raw := range []string{
+		"webproxy://relay.example/" + plainSecretHex,
+		"webproxy://relay.example:8443/" + plainSecretHex + "?carrier=auto",
+		"webproxy://relay.example/" + plainSecretHex + "?carrier=websocket",
+		"webproxy://relay.example/" + plainSecretHex + "?carrier=https",
+	} {
+		resolver, err := tg.ParseProxyURL(raw)
+		require.NoError(t, err, "url %q", raw)
+		assert.NotNil(t, resolver, "url %q", raw)
+		assert.NotErrorIs(t, err, tg.ErrWebProxyNotWired, "url %q", raw)
+	}
+}
+
+func TestParseProxyURLWebProxyBadSecret(t *testing.T) {
+	t.Parallel()
+
+	for _, raw := range []string{
+		"webproxy://relay.example/secret",                 // non-hex
+		"webproxy://relay.example/" + plainSecretHex[:30], // 15 bytes
+		"webproxy://relay.example/",                       // empty secret
+	} {
+		_, err := tg.ParseProxyURL(raw)
+		require.ErrorIs(t, err, tg.ErrBadProxySecret, "url %q", raw)
+		assert.NotErrorIs(t, err, tg.ErrWebProxyNotWired, "url %q", raw)
+	}
+}
+
+func TestParseProxyURLWebProxyBadCarrier(t *testing.T) {
+	t.Parallel()
+
+	_, err := tg.ParseProxyURL("webproxy://relay.example/" + plainSecretHex + "?carrier=quic")
+	require.ErrorIs(t, err, tg.ErrBadProxyURL)
 }
