@@ -27,3 +27,8 @@
 - profile save/list/show/rm реализованы (config.Save экспортирован), README с Mermaid+badges+TOC.
 - Ворота финальные: build CGO_ENABLED=0 (21.3MB), vet OK, golangci-lint strict 0, 567 тестов -race ok (10 pkg), govulncheck: 0 в коде/импортах (3 транзитивные не вызываются), doctor exit-семантика верна, smoke profile roundtrip OK.
 - Ворота финальный прогон вебпрокси-интеграции: go test -race -tags webproxy_integration ./internal/webproxy/ (passed у агента; требует docker/git для сборки tproxy-server).
+
+## Релизная волна (репо 4q4r/teleparse)
+- Приватный репо создан, main запушен. 5 PR смержены: release-infra, download/cli smokes (+2 прод-бага: openPartFile MkdirAll, double-claim race → RecordAttempt), tlmock+scan/tg smokes (doc-accurate), release-hardening (🔴 FloodWait infinite retry → WithMaxWait; de-hardcode; UX Examples; API verify — 0 mismatches), webproxy flake (🔴 прод-рейс EOF/Write gap → writeGate).
+- Аккаунт-левел: GitHub Actions ОТКЛЮЧЕН у пользователя (API "Actions has been disabled for this user") — нужен web-переключатель github.com/settings/actions. CI не гоняется, все ветки верифицированы локально (lint 0, -race).
+- Итог main: 669 тестов, 12 пакетов, lint 0, tlmock-слой (реальный tg.Client поверх fake Invoker), coverage cli 66%, tg 71%, pace 95%, store 89%.
