@@ -70,6 +70,11 @@ func TestCompileForwardPredicates(t *testing.T) {
 			ctx:  baseContext(), want: false,
 		},
 		{
+			name: "fwd from ignores phone entries since origins hide phones",
+			set:  func(o *filters.Options) { o.FwdFrom = []string{"+79001234567"} },
+			ctx:  forwardedContext(nil), want: false,
+		},
+		{
 			name: "fwd hidden true matches hidden origin",
 			set:  func(o *filters.Options) { o.FwdHidden = filters.Tri(true) },
 			ctx:  forwardedContext(func(fwd *filters.ForwardInfo) { fwd.Hidden = true }), want: true,

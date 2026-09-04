@@ -99,8 +99,8 @@ type Options struct {
 	ContactsOnly        bool     `toml:"contacts_only"        flag:"sender-contacts"       usage:"only messages from users in my contacts"`
 	MutualOnly          bool     `toml:"mutual_only"          flag:"sender-mutual"         usage:"only mutual contacts"`
 	FromMe              TriBool  `toml:"from_me"              flag:"from-me"               usage:"messages sent by me (true|false)"`
-	FromUsers           []string `toml:"from_users"           flag:"from"                  usage:"sender ids/@usernames (comma list)"`
-	ExcludeUsers        []string `toml:"exclude_users"        flag:"exclude"               usage:"sender ids/@usernames to skip"`
+	FromUsers           []string `toml:"from_users"           flag:"from"                  usage:"sender ids/@usernames/phone numbers (comma list)"`
+	ExcludeUsers        []string `toml:"exclude_users"        flag:"exclude"               usage:"sender ids/@usernames/phone numbers to skip"`
 	SenderBot           TriBool  `toml:"sender_bot"           flag:"sender-bot"            usage:"bot senders (true|false)"`
 	SenderPremium       TriBool  `toml:"sender_premium"       flag:"sender-premium"        usage:"premium senders (true|false)"`
 	SenderVerified      TriBool  `toml:"sender_verified"      flag:"sender-verified"       usage:"verified senders (true|false)"`
