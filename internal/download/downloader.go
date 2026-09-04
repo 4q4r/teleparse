@@ -346,6 +346,8 @@ func (m *Manager) downloadWithRetries(runCtx, bookCtx context.Context, runID str
 
 	attempt := item.Attempts
 
+	var lastErr error
+
 	for attempt < m.cfg.RetryMax {
 		attempt++
 
@@ -358,11 +360,13 @@ func (m *Manager) downloadWithRetries(runCtx, bookCtx context.Context, runID str
 			}
 		}
 
+		lastErr = err
+
 		if m.handleFailure(runCtx, bookCtx, runID, state, item, err, attempt, resolved, &location) {
 			return
 		}
 
-		m.recordFailure(bookCtx, item, err, attempt)
+		m.recordAttempt(bookCtx, item, err, attempt)
 
 		if err := m.sleepBackoff(runCtx, attempt); err != nil {
 			m.failItem(bookCtx, state, item, err, attempt)
@@ -376,6 +380,10 @@ func (m *Manager) downloadWithRetries(runCtx, bookCtx context.Context, runID str
 			return
 		}
 	}
+
+	// The ladder is exhausted: only now does the row leave downloading, so
+	// the terminal failure is visible to later runs and crash recovery.
+	m.recordFailure(bookCtx, item, lastErr, attempt)
 
 	state.mutate(func(res *Result) {
 		res.Failed++
@@ -459,7 +467,7 @@ func (m *Manager) parkRun(bookCtx context.Context, runID string, state *runState
 ) {
 	resumeAt := m.now().Add(time.Duration(seconds) * time.Second)
 
-	m.recordFailure(bookCtx, item, err, attempt)
+	m.recordAttempt(bookCtx, item, err, attempt)
 
 	if err := m.store.SetResumeAt(bookCtx, runID, resumeAt); err != nil {
 		m.reporter.Inc("store_errors", 1)
@@ -583,8 +591,14 @@ func indexFreePath(path string) (string, error) {
 
 // openPartFile opens (creating if needed) the .part file and reports the
 // resume offset: the current file size, since on-disk bytes are the only
-// truth after a crash (stored bytes_done may lag behind).
+// truth after a crash (stored bytes_done may lag behind). The parent
+// directory is created first: templated final paths commonly nest several
+// levels ({chat}/{date}/...) that no earlier stage materializes.
 func openPartFile(partPath string, _ int64) (*os.File, int64, error) {
+	if err := os.MkdirAll(filepath.Dir(partPath), dirPermDownload); err != nil {
+		return nil, 0, fmt.Errorf("create part dir for %s: %w", partPath, err)
+	}
+
 	file, err := os.OpenFile(partPath, os.O_CREATE|os.O_RDWR, filePermDownload)
 	if err != nil {
 		return nil, 0, fmt.Errorf("open part file %s: %w", partPath, err)
@@ -655,6 +669,15 @@ func (m *Manager) runHooks(ctx context.Context, path string) {
 		}
 
 		cancel()
+	}
+}
+
+// recordAttempt bumps the attempt counter of an in-flight item without
+// releasing its claim: the row stays downloading, so the feeder cannot
+// re-claim it while the retry ladder is still running.
+func (m *Manager) recordAttempt(ctx context.Context, item store.MediaItem, err error, attempts int) {
+	if err := m.store.RecordAttempt(ctx, item.ChatID, item.MessageID, item.MediaIndex, err.Error(), attempts); err != nil {
+		m.reporter.Inc("store_errors", 1)
 	}
 }
 

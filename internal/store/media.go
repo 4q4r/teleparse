@@ -199,6 +199,30 @@ func (s *Store) MarkDone(ctx context.Context, chatID, messageID int64, mediaInde
 	return nil
 }
 
+// RecordAttempt bumps the attempt counter and last error of a claimed row
+// while keeping its downloading status, so the in-flight retry ladder keeps
+// ownership and ClaimPending cannot hand the row to a second worker.
+func (s *Store) RecordAttempt(ctx context.Context, chatID, messageID int64, mediaIndex int,
+	errText string, attempts int,
+) error {
+	var errPtr *string
+
+	if errText != "" {
+		errPtr = &errText
+	}
+
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE media
+		SET last_error = ?, attempts = ?, updated_at = ?
+		WHERE chat_id = ? AND message_id = ? AND media_index = ?`,
+		errPtr, attempts, nowUTC(), chatID, messageID, mediaIndex)
+	if err != nil {
+		return fmt.Errorf("record attempt %d/%d/%d: %w", chatID, messageID, mediaIndex, err)
+	}
+
+	return nil
+}
+
 // MarkFailed records a failed attempt with its error text and attempt count.
 func (s *Store) MarkFailed(ctx context.Context, chatID, messageID int64, mediaIndex int,
 	errText string, attempts int,
