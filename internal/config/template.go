@@ -93,6 +93,23 @@ func defaultTemplate() string {
 # retry_max = 4
 # Attempts per failed file with exponential backoff; must be >= 1.
 
+# [download] tunes transfer speed. Defaults mirror official clients
+# (TDLib uses 2 download connections per DC; 3 is safely unremarkable).
+
+[download]
+# threads = 4
+# Ranged parts fetched in parallel per file (1-16). Each thread rides its
+# own pooled connection, so one large file can saturate a link.
+
+# connections = 3
+# MTProto connections pooled per data center, shared by all files routed
+# to that DC (1-8). Turbo preset for impatient lines:
+#   threads = 8, connections = 6
+# Never exceed ~20 total connections per DC: beyond that Telegram answers
+# FLOOD_PREMIUM_WAIT (an account-level throttle; Telegram Premium removes
+# it). Short waits are slept automatically and surfaced in the live UI as
+# "throttled Ns" - they do not park the run.
+
 # [output] controls where and how downloaded files land.
 
 [output]

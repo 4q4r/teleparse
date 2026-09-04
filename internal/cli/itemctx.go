@@ -113,6 +113,7 @@ func (r *runResolver) Resolve(item store.MediaItem) (download.Resolved, error) {
 		resolved.Path = path.Join(r.root, rel)
 		resolved.Meta = sidecarFromContext(entry.fctx, resolved.Path)
 		resolved.Location = locationFromMessage(entry.msg)
+		resolved.DC = dcFromMessage(entry.msg)
 
 		return resolved, nil
 	}
@@ -241,6 +242,29 @@ func locationFromMessage(msg *tg.Message) tg.InputFileLocationClass {
 	default:
 		return nil
 	}
+}
+
+// dcFromMessage extracts the data center a message's file is stored on;
+// 0 when unknown, which routes the transfer through the home pool and the
+// FILE_MIGRATE retry.
+func dcFromMessage(msg *tg.Message) int {
+	if msg == nil {
+		return 0
+	}
+
+	switch media := msg.Media.(type) {
+	case *tg.MessageMediaPhoto:
+		if photo, ok := media.Photo.(*tg.Photo); ok {
+			return photo.DCID
+		}
+	case *tg.MessageMediaDocument:
+		if document, ok := media.Document.(*tg.Document); ok {
+			return document.DCID
+		}
+	default:
+	}
+
+	return 0
 }
 
 // thumbSizeOf picks the type tag of the largest photo size.
