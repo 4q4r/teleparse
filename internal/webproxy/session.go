@@ -416,6 +416,10 @@ func (st *Stream) Write(data []byte) (int, error) {
 	total := 0
 
 	for len(data) > 0 {
+		if err := st.writeGate(); err != nil {
+			return total, fmt.Errorf("write stream %d: %w", st.id, err)
+		}
+
 		chunk := DataChunkSize(len(data))
 
 		got, err := st.sendWin.Reserve(context.Background(), chunk)
@@ -604,5 +608,24 @@ func (st *Stream) stopLane() {
 
 	if st.laneStop != nil {
 		st.laneStop()
+	}
+}
+
+// writeGate rejects writes once the stream's terminal state is observable.
+// It reads the same mutex-guarded state Read reports, so the close transition
+// is atomic across both directions: once a reader can observe EOF or a
+// terminal error, no strictly later Write can slip between that publication
+// and the send-window abort.
+func (st *Stream) writeGate() error {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+
+	switch {
+	case st.closed || errors.Is(st.recvErr, io.EOF):
+		return ErrStreamClosed
+	case st.recvErr != nil:
+		return st.recvErr
+	default:
+		return nil
 	}
 }
