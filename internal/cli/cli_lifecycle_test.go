@@ -95,7 +95,9 @@ func TestDlHelpDocumentsFilterSurface(t *testing.T) {
 }
 
 func TestProxyShowDefaultsToDirect(t *testing.T) {
-	t.Parallel()
+	// Serial: t.Setenv cannot run in parallel tests.
+
+	clearProxyEnv(t)
 
 	out, err := execute(t, "--config", tempConfigPath(t), "proxy", "show")
 	require.NoError(t, err)
@@ -232,6 +234,7 @@ func TestDoctorFailsWithoutCreds(t *testing.T) {
 func TestDoctorPassesWithCreds(t *testing.T) {
 	// Serial: t.Setenv cannot run in parallel tests.
 
+	clearProxyEnv(t)
 	t.Setenv("TELEPARSE_API_ID", "123456")
 	t.Setenv("TELEPARSE_API_HASH", "0123456789abcdef0123456789abcdef")
 	t.Setenv("HOME", t.TempDir())
