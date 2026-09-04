@@ -1,0 +1,24 @@
+# Build artifacts
+/teleparse
+/teleparse-*
+*.test
+*.out
+dist/
+
+# Secrets & sessions — NEVER commit
+.env
+*.session
+*.session-journal
+accounts/
+state.db*
+*.part
+
+# Tooling
+.golangci-cache/
+.superpowers/
+
+# Editor/OS
+.idea/
+.vscode/
+*.swp
+.DS_Store

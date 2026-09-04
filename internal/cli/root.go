@@ -1,0 +1,84 @@
+// Package cli wires the teleparse command tree.
+package cli
+
+import (
+	"fmt"
+	"teleparse/internal/config"
+
+	"github.com/spf13/cobra"
+)
+
+// version is set at build time via -ldflags.
+var version = "dev"
+
+// App carries shared state across commands.
+type App struct {
+	cfg   *config.Config
+	paths *config.Paths
+}
+
+// New builds the root command.
+func New() *cobra.Command {
+	app := &App{}
+	root := &cobra.Command{
+		Use:   "teleparse",
+		Short: "Telegram userbot media parser with a powerful filter engine",
+		Long: "teleparse scans chats of your personal Telegram accounts and downloads media\n" +
+			"matching any combination of ~150 filters. Multi-account, proxy-friendly,\n" +
+			"anti-ban paced. Sessions live in ~/.config/teleparse.",
+		Version:       version,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			path, _ := cmd.Flags().GetString("config")
+			cfg, paths, err := config.Load(path)
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+			if v, _ := cmd.Flags().GetString("account"); v != "" {
+				cfg.Auth.Account = v
+			}
+			if v, _ := cmd.Flags().GetString("proxy"); v != "" {
+				cfg.Net.Proxy = v
+			}
+			if v, _ := cmd.Flags().GetString("root"); v != "" {
+				cfg.Output.Root = v
+			}
+			app.cfg, app.paths = cfg, paths
+			return nil
+		},
+	}
+	root.PersistentFlags().String("config", "", "config file path (default ~/.config/teleparse/config.toml)")
+	root.PersistentFlags().String("account", "", "account name (default from config)")
+	root.PersistentFlags().String("proxy", "", "proxy URL: socks5:// socks4:// http:// mtproto:// webproxy://")
+	root.PersistentFlags().String("root", "", "downloads root (overrides config)")
+
+	root.AddCommand(
+		authCmd(app),
+		chatsCmd(app),
+		scanCmd(app),
+		dlCmd(app),
+		syncCmd(app),
+		resumeCmd(app),
+		runsCmd(app),
+		profileCmd(app),
+		exportCmd(app),
+		statsCmd(app),
+		proxyCmd(app),
+		doctorCmd(app),
+	)
+
+	return root
+}
+
+// addFilterFlags registers every filters.Options field as a flag on cmd
+// using the `flag` and `usage` struct tags (single source of truth).
+func addFilterFlags(cmd *cobra.Command, opts *filterFlags) {
+	registerReflectFlags(cmd.Flags(), &opts.opts)
+	opts.cmd = cmd
+}
+
+func fail(cmd *cobra.Command, err error) error {
+	cmd.SilenceUsage = false
+	return err
+}
