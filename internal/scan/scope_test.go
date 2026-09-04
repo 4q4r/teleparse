@@ -4,6 +4,7 @@ import (
 	"context"
 	"teleparse/internal/filters"
 	"teleparse/internal/scan"
+	"teleparse/internal/testutil/tlmock"
 	"testing"
 
 	"github.com/gotd/td/telegram/message/peer"
@@ -270,6 +271,61 @@ func TestResolveMixedSpecsDedupe(t *testing.T) {
 	assert.True(t, targets[0].Chat.Saved)
 	assert.Equal(t, "Alice", targets[1].Chat.Title)
 	assert.Equal(t, "News", targets[2].Chat.Title)
+}
+
+func TestResolveAllPrefilterExcludes(t *testing.T) {
+	t.Parallel()
+
+	resolver := newResolver(fakeScopeAPI{}, sampleDialogs())
+
+	targets, err := resolver.Resolve(t.Context(), []string{"all"}, filters.Options{
+		ExcludeChatType: []string{"channel"},
+	})
+	require.NoError(t, err)
+	require.Len(t, targets, 5)
+
+	for _, target := range targets {
+		assert.NotEqual(t, "channel", target.Chat.Type)
+	}
+}
+
+func TestResolveAllPrefilterChatDeleted(t *testing.T) {
+	t.Parallel()
+
+	users := map[int64]*tg.User{
+		10: tlmock.User(10, "Alice", tlmock.WithAccessHash(110)),
+		12: tlmock.User(12, "Ghost", tlmock.WithDeleted, tlmock.WithAccessHash(112)),
+	}
+	entities := peer.NewEntities(users, nil, nil)
+
+	dialogs := fakeDialogs{dialogs: []fakeDialog{
+		{dialog: &tg.Dialog{Peer: &tg.PeerUser{UserID: 10}}, entities: entities},
+		{dialog: &tg.Dialog{Peer: &tg.PeerUser{UserID: 12}}, entities: entities},
+	}}
+
+	cases := []struct {
+		name  string
+		opts  filters.Options
+		count int
+		title string
+	}{
+		{"deleted only", filters.Options{ChatDeleted: filters.Tri(true)}, 1, "Ghost"},
+		{"deleted excluded", filters.Options{ChatDeleted: filters.Tri(false)}, 1, "Alice"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			resolver := newResolver(fakeScopeAPI{}, dialogs)
+
+			targets, err := resolver.Resolve(t.Context(), []string{"all"}, tc.opts)
+			require.NoError(t, err)
+			require.Len(t, targets, tc.count)
+
+			assert.Equal(t, tc.title, targets[0].Chat.Title)
+		})
+	}
 }
 
 func TestResolveEmptySpecs(t *testing.T) {

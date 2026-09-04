@@ -101,7 +101,8 @@ func inAlbumModes() []string {
 }
 
 func validateGlobs(opts *Options) error {
-	patterns := append([]string{opts.ChatGlob, opts.NameGlob}, opts.Mime...)
+	patterns := append(append([]string{opts.ChatGlob, opts.NameGlob}, opts.Mime...), opts.ExcludeMime...)
+
 	for _, pattern := range patterns {
 		if pattern == "" {
 			continue
@@ -268,6 +269,18 @@ func chatPredicates(opts *Options, set regexSet) []NamedPredicate {
 		}})
 	}
 
+	if len(opts.ExcludeChatType) > 0 {
+		preds = append(preds, NamedPredicate{Name: "exclude_chat_type", Fn: func(ctx *Context) bool {
+			return !chatTypeMatches(opts.ExcludeChatType, ctx)
+		}})
+	}
+
+	if opts.ChatDeleted.IsSet() {
+		preds = append(preds, triPredicate("chat_deleted", opts.ChatDeleted.Value(), func(ctx *Context) bool {
+			return ctx.Chat.Deleted
+		}))
+	}
+
 	if opts.ChatGlob != "" {
 		preds = append(preds, NamedPredicate{Name: "chat_glob", Fn: func(ctx *Context) bool {
 			return matchGlob(opts.ChatGlob, ctx.Chat.Title)
@@ -337,6 +350,18 @@ func senderPredicates(opts *Options, set regexSet) []NamedPredicate {
 	if opts.MutualOnly {
 		preds = append(preds, NamedPredicate{Name: "mutual_only", Fn: func(ctx *Context) bool {
 			return ctx.Sender.IsMutual
+		}})
+	}
+
+	if opts.SenderNonContacts {
+		preds = append(preds, NamedPredicate{Name: "sender_non_contacts", Fn: func(ctx *Context) bool {
+			return ctx.Sender.Present && !ctx.Sender.IsContact
+		}})
+	}
+
+	if opts.SenderNonMutual {
+		preds = append(preds, NamedPredicate{Name: "sender_non_mutual", Fn: func(ctx *Context) bool {
+			return ctx.Sender.Present && !ctx.Sender.IsMutual
 		}})
 	}
 
@@ -478,6 +503,17 @@ func mediaPredicates(opts *Options) []NamedPredicate {
 		}})
 	}
 
+	if len(opts.ExcludeMedia) > 0 {
+		preds = append(preds, NamedPredicate{Name: "exclude_media", Fn: func(ctx *Context) bool {
+			file, ok := fileOf(ctx)
+			if !ok {
+				return true
+			}
+
+			return !contains(opts.ExcludeMedia, file.Kind)
+		}})
+	}
+
 	if len(opts.StickerKind) > 0 {
 		preds = append(preds, NamedPredicate{Name: "sticker_kind", Fn: func(ctx *Context) bool {
 			file, ok := fileOf(ctx)
@@ -586,12 +622,38 @@ func fileMatchPredicates(opts *Options, set regexSet) []NamedPredicate {
 		}))
 	}
 
+	if len(opts.ExcludeMime) > 0 {
+		excludePatterns := lowerAll(opts.ExcludeMime)
+
+		preds = append(preds, NamedPredicate{Name: "exclude_mime", Fn: func(ctx *Context) bool {
+			file, ok := fileOf(ctx)
+			if !ok {
+				return true
+			}
+
+			return !anyGlobMatches(excludePatterns, strings.ToLower(file.Mime))
+		}})
+	}
+
 	if len(opts.Ext) > 0 {
 		wanted := normalizeExts(opts.Ext)
 
 		preds = append(preds, requireFilePredicate("ext", func(file *FileInfo) bool {
 			return contains(wanted, normalizeExt(file.Ext))
 		}))
+	}
+
+	if len(opts.ExcludeExt) > 0 {
+		skipped := normalizeExts(opts.ExcludeExt)
+
+		preds = append(preds, NamedPredicate{Name: "exclude_ext", Fn: func(ctx *Context) bool {
+			file, ok := fileOf(ctx)
+			if !ok {
+				return true
+			}
+
+			return !contains(skipped, normalizeExt(file.Ext))
+		}})
 	}
 
 	if opts.NameGlob != "" {
@@ -711,6 +773,8 @@ func explainLines(opts *Options, push Pushdown) []string {
 		{on: push.MaxDate != 0, line: "server: max_date=" + strconv.FormatInt(push.MaxDate, 10)},
 		{on: len(push.FromUsers) > 0, line: "server: from_users=" + strings.Join(push.FromUsers, ",")},
 		{on: len(opts.ChatType) > 0, line: "client: chat_type=" + strings.Join(opts.ChatType, ",")},
+		{on: len(opts.ExcludeChatType) > 0, line: "client: exclude_chat_type=" + strings.Join(opts.ExcludeChatType, ",")},
+		{on: opts.ChatDeleted.IsSet(), line: "client: chat_deleted=" + opts.ChatDeleted.String()},
 		{on: opts.ChatGlob != "", line: "client: chat_glob=" + opts.ChatGlob},
 		{on: opts.ChatRegex != "", line: "client: chat_regex=" + opts.ChatRegex},
 		{on: opts.Archived == "only" || opts.Archived == "exclude", line: "client: archived=" + opts.Archived},
@@ -719,6 +783,8 @@ func explainLines(opts *Options, push Pushdown) []string {
 		{on: opts.SkipProtected, line: "client: skip_protected=true"},
 		{on: opts.ContactsOnly, line: "client: contacts_only=true"},
 		{on: opts.MutualOnly, line: "client: mutual_only=true"},
+		{on: opts.SenderNonContacts, line: "client: sender_non_contacts=true"},
+		{on: opts.SenderNonMutual, line: "client: sender_non_mutual=true"},
 		{on: opts.FromMe.IsSet(), line: "client: from_me=" + opts.FromMe.String()},
 		{on: len(opts.FromUsers) > 0, line: "client: from_users=" + strings.Join(opts.FromUsers, ",")},
 		{on: len(opts.ExcludeUsers) > 0, line: "client: exclude_users=" + strings.Join(opts.ExcludeUsers, ",")},
@@ -731,11 +797,14 @@ func explainLines(opts *Options, push Pushdown) []string {
 		{on: opts.SenderUsernameRegex != "", line: "client: sender_username_regex=" + opts.SenderUsernameRegex},
 		{on: opts.SenderPhoneRegex != "", line: "client: sender_phone_regex=" + opts.SenderPhoneRegex},
 		{on: len(opts.Media) > 0, line: "client: media=" + strings.Join(opts.Media, ",")},
+		{on: len(opts.ExcludeMedia) > 0, line: "client: exclude_media=" + strings.Join(opts.ExcludeMedia, ",")},
 		{on: len(opts.StickerKind) > 0, line: "client: sticker_kind=" + strings.Join(opts.StickerKind, ",")},
 		{on: opts.HasMedia.IsSet(), line: "client: has_media=" + opts.HasMedia.String()},
 		{on: opts.InAlbum == "only" || opts.InAlbum == "first", line: "client: in_album=" + opts.InAlbum},
 		{on: len(opts.Mime) > 0, line: "client: mime=" + strings.Join(opts.Mime, ",")},
+		{on: len(opts.ExcludeMime) > 0, line: "client: exclude_mime=" + strings.Join(opts.ExcludeMime, ",")},
 		{on: len(opts.Ext) > 0, line: "client: ext=" + strings.Join(opts.Ext, ",")},
+		{on: len(opts.ExcludeExt) > 0, line: "client: exclude_ext=" + strings.Join(opts.ExcludeExt, ",")},
 		{on: opts.NameGlob != "", line: "client: name_glob=" + opts.NameGlob},
 		{on: opts.NameRegex != "", line: "client: name_regex=" + opts.NameRegex},
 		{on: opts.MinSize != "", line: "client: min_size=" + opts.MinSize},

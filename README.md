@@ -134,18 +134,55 @@ Families (AND-composed; every flag has a config-key twin):
 
 | Family | Flags (examples) |
 |---|---|
-| Media type | `--media photo,video,video-note,voice,audio,document,sticker,gif` · `--sticker-kind animated` · `--has-media=false` · `--in-album only` |
-| File metadata | `--mime application/zip` / `video/*` · `--ext .zip` · `--name '*.zip'` · `--name-regex` · `--min/max-size 20MB` (**before** download) · `--min/max-duration 30s` · `--min/max-width/height` · `--min-mp 2` · `--streamable` · `--video-nosound` |
+| Media type | `--media photo,video,video-note,voice,audio,document,sticker,gif` · `--exclude-media video` (skips listed kinds; **overrides** `--media` matches) · `--sticker-kind animated` · `--has-media=false` · `--in-album only` |
+| File metadata | `--mime application/zip` / `video/*` · `--exclude-mime image/*` · `--ext .zip` · `--exclude-ext .mp4` · `--name '*.zip'` · `--name-regex` · `--min/max-size 20MB` (**before** download) · `--min/max-duration 30s` · `--min/max-width/height` · `--min-mp 2` · `--streamable` · `--video-nosound` |
 | Text & entities | `--text-regex` · `--has-text only\|none` · `--hashtag news` · `--any-hashtag` · `--text-mention @user` · `--was-mentioned` (notification ≠ text!) · `--has-url` · `--url-regex` · `--has-email` · `--has-phone` · `--command /start` · `--emoji-only` |
 | Dates | `--from-date 2026-01-01\|7d` · `--until-date` · `--last 7d` · `--older-than 30d` · `--edited` |
 | Forwards | `--forwarded` · `--fwd-from @channel` · `--fwd-hidden` · `--fwd-date-from/to` |
 | Engagement | `--is-reply` · `--min-views` · `--min-forwards` · `--min-reactions` · `--reaction 🔥` · `--pinned` |
-| Chat | `--chat-type private,group,supergroup,channel,forum` · `--chat-glob 'News*'` · `--chat-regex` · `--archived only` · `--saved` · `--chat-username` · `--skip-protected` |
-| Sender | `--sender-contacts` · `--sender-mutual` · `--from-me` · `--from @user,123,+15551234567` (ids \| @usernames \| phone numbers) · `--exclude` (same syntax) · `--sender-bot/premium/verified/scam/deleted` · `--sender-name-regex` |
+| Chat | `--chat-type private,group,supergroup,channel,forum` · `--exclude-chat-type channel` · `--chat-glob 'News*'` · `--chat-regex` · `--archived only` · `--saved` · `--chat-username` · `--chat-deleted=true` · `--skip-protected` |
+| Sender | `--sender-contacts` · `--sender-non-contacts` (inverse) · `--sender-mutual` · `--sender-non-mutual` (inverse) · `--from-me` · `--from @user,123,+15551234567` (ids \| @usernames \| phone numbers) · `--exclude` (same syntax) · `--sender-bot/premium/verified/scam/deleted` · `--sender-name-regex` |
 | IDs & misc | `--min-id/--max-id` · `--service only` · `--silent` · `--spoiler` |
 | Execution | `--limit` (scan budget) · `--reverse` · `--dedupe unique-id\|hash\|off` · `--skip-existing` · `--recurse-topics` · `--follow-replies N` · `--albums expand\|first\|skip` |
 
 Sizes: `500`, `10KB`, `20MB`, `1.5GiB`; durations `30s`/`10m`; dates ISO-8601 or relative `7d`/`12h`/`2w`.
+
+Every `--exclude-*` family evaluates **after** its include twin: a file or chat
+matching both is dropped, and an exclude alone (no include set) acts as pure
+negation — everything except the listed values passes.
+
+### Selecting chats
+
+Scan targets accept **multiple specs in one command**, each expanded and
+deduplicated by chat id, so overlaps never walk twice:
+
+```bash
+teleparse dl @durov t.me/telegram 123456789 saved --media photo
+```
+
+Spec forms: `@username`, bare `name`, `t.me/...` links, numeric ids
+(`-100...` channel prefixes tolerated) and the keywords `all` (every dialog,
+prefiltered by your chat filters) and `saved` (Saved Messages). Numeric ids
+resolve through the local dialog cache — run `teleparse chats list` first to
+warm it.
+
+### Deleted accounts
+
+OFTG-style exports mark deleted peers and stop there; against the live API the
+picture is different: after an account is deleted the **dialog remains
+walkable by numeric id** (resolution via the dialog cache still works), while
+its **username dies** — `@user` and `t.me/user` specs fail with
+`CHANNEL_PRIVATE`-style errors. Group and channel peers never count as
+"deleted"; the flag only applies to private-chat peers.
+
+```bash
+teleparse dl 123456789 --chat-deleted=true     # whole chat: peer is a deleted account
+teleparse dl all --sender-deleted=true          # per-message: deleted senders only
+```
+
+`--chat-deleted=false` inverts the scope (live peers only); unset means don't
+care. `teleparse chats list` shows the numeric ids you need once usernames
+are gone.
 
 ## Configuration
 

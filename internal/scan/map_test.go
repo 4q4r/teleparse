@@ -3,8 +3,10 @@ package scan_test
 import (
 	"teleparse/internal/filters"
 	"teleparse/internal/scan"
+	"teleparse/internal/testutil/tlmock"
 	"testing"
 
+	"github.com/gotd/td/telegram/message/peer"
 	tg "github.com/gotd/td/tg"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -459,4 +461,27 @@ func TestMapService(t *testing.T) {
 	assert.True(t, ctx.Message.Mentioned)
 	assert.Nil(t, ctx.File)
 	assert.Empty(t, ctx.Message.Text)
+}
+
+func TestMapDialogChatDeletedUser(t *testing.T) {
+	t.Parallel()
+
+	entities := peer.NewEntities(map[int64]*tg.User{
+		12: tlmock.User(12, "Ghost", tlmock.WithDeleted),
+		10: tlmock.User(10, "Alice"),
+	}, nil, nil)
+
+	dialog := &tg.Dialog{Peer: &tg.PeerUser{UserID: 12}}
+	chat, ok := scan.MapDialogChat(dialog, entities)
+	require.True(t, ok)
+
+	assert.Equal(t, "private", chat.Type)
+	assert.True(t, chat.Deleted)
+
+	liveDialog := &tg.Dialog{Peer: &tg.PeerUser{UserID: 10}}
+	liveChat, ok := scan.MapDialogChat(liveDialog, entities)
+	require.True(t, ok)
+
+	assert.Equal(t, "private", liveChat.Type)
+	assert.False(t, liveChat.Deleted)
 }
