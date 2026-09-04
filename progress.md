@@ -15,3 +15,10 @@
 - bdandy/go-socks4 тянет древний x/net → выкинут, SOCKS4 будет in-house.
 - x/net пиннут v0.58.0, testify v1.12.1.
 - Диспатч волны 1: 3 субагента параллельно (tg-gateway / filters-engine / webproxy).
+
+## Волна 1 завершена
+- tg (4731636): аккаунты+flock+device-id, логин/2FA, SOCKS5/4+HTTP+MTProto dd/ee диалеры, Telethon-импорт, dialogs/contacts, CLI auth/chats/doctor/proxy. go.mod допинен (агент прав — модуль был без require).
+- webproxy (5ed2499): полный tproxy v1 клиент — фреймы, WINDOW, bootstrap, 4 carrier, dcs.Resolver + obfuscated2/FakeTLS. Интеграция с реальным tproxy-server (сборка из master) — PASSED. 82.4% coverage.
+- filters p1 (d8f4400) + p2 (4859123): Context, Compile, Pushdown, ~90 predicate-семейств, 435 тестов всего.
+- Ворота репо: lint 0, build/vet/test -race зелёные.
+- Волна 2: store/pace/export → scan → download+CLI wiring.
