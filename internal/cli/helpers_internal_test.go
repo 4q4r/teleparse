@@ -473,7 +473,7 @@ func TestPrintPlanCountsSummary(t *testing.T) {
 	assert.Contains(t, buf.String(), "downloaded: 2 (3.0KiB), skipped: 1, failed: 1")
 }
 
-func TestPrintChatsAndDetail(t *testing.T) {
+func TestRenderChatsAndDetail(t *testing.T) {
 	t.Parallel()
 
 	chats := []tgap.ChatInfo{
@@ -486,18 +486,24 @@ func TestPrintChatsAndDetail(t *testing.T) {
 	assert.Equal(t, "News", filtered[0].Title)
 
 	cmd, buf := newOutCmd()
-	require.NoError(t, printChats(cmd, chats, false))
+	require.NoError(t, renderChats(cmd, chats, FormatTable))
 	assert.Contains(t, buf.String(), "1")
 	assert.Contains(t, buf.String(), "channel")
 	assert.Contains(t, buf.String(), "News")
 
 	cmd, buf = newOutCmd()
-	require.NoError(t, printChats(cmd, nil, false))
+	require.NoError(t, renderChats(cmd, nil, FormatTable))
 	assert.Contains(t, buf.String(), "no chats")
 
 	cmd, buf = newOutCmd()
-	require.NoError(t, printChats(cmd, chats, true))
+	require.NoError(t, renderChats(cmd, chats, FormatJSON))
 	assert.Contains(t, buf.String(), `"title": "Ann"`, "json mode marshals the full list")
+
+	cmd, buf = newOutCmd()
+	require.NoError(t, renderChats(cmd, chats, FormatPlain))
+	assert.Contains(t, buf.String(), "id: 1\n")
+	assert.Contains(t, buf.String(), "title: News\n")
+	assert.NotContains(t, buf.String(), "\t", "plain render must not pad")
 
 	cmd, buf = newOutCmd()
 	printChatDetail(cmd, tgap.ChatInfo{ID: 3, Title: "Docs", Type: "group", Username: "docs"})

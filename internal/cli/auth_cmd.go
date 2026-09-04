@@ -178,8 +178,11 @@ func authStatusCmd(app *App) *cobra.Command {
 					return errNotAuthorized
 				}
 
-				detail := fmt.Sprintf("account:  %s\nuser id:  %d\nname:     %s\nphone:    %s\n",
-					account, info.ID, strings.TrimSpace(info.FirstName+" "+info.LastName), info.Phone)
+				premium := manager.AccountPremium(ctx, account, client.Self)
+
+				detail := fmt.Sprintf("account:  %s\nuser id:  %d\nname:     %s\nphone:    %s\npremium:  %s (source: %s)\n",
+					account, info.ID, strings.TrimSpace(info.FirstName+" "+info.LastName), info.Phone,
+					yesNo(premium.Premium), premium.Source)
 
 				if info.Username != "" {
 					detail += fmt.Sprintf("username: @%s\n", info.Username)
@@ -208,30 +211,51 @@ func authListCmd(app *App) *cobra.Command {
 	return &cobra.Command{
 		Use:     "list",
 		Short:   "List known local sessions",
-		Example: "  teleparse auth list",
+		Example: "  teleparse auth list --format json",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			names, err := tg.NewAccountManager(app.paths.AccountsDir).List()
 			if err != nil {
 				return fail(cmd, err)
 			}
 
-			if len(names) == 0 {
-				return printLine(cmd, "no accounts; run: teleparse auth login\n")
-			}
-
-			for _, name := range names {
-				marker := ""
-
-				if name == app.cfg.Auth.Account {
-					marker = " (default)"
+			switch app.outputFormat() {
+			case FormatJSON:
+				if len(names) == 0 {
+					names = []string{}
 				}
 
-				if err := printLine(cmd, "%s%s\n", name, marker); err != nil {
-					return fail(cmd, err)
+				return printJSON(cmd, names)
+			case FormatPlain:
+				if len(names) == 0 {
+					return printLine(cmd, "no accounts; run: teleparse auth login\n")
 				}
-			}
 
-			return nil
+				for _, name := range names {
+					if err := printLine(cmd, "account: %s\n", name); err != nil {
+						return fail(cmd, err)
+					}
+				}
+
+				return nil
+			default:
+				if len(names) == 0 {
+					return printLine(cmd, "no accounts; run: teleparse auth login\n")
+				}
+
+				for _, name := range names {
+					marker := ""
+
+					if name == app.cfg.Auth.Account {
+						marker = " (default)"
+					}
+
+					if err := printLine(cmd, "%s%s\n", name, marker); err != nil {
+						return fail(cmd, err)
+					}
+				}
+
+				return nil
+			}
 		},
 	}
 }

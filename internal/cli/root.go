@@ -13,8 +13,20 @@ var version = "dev"
 
 // App carries shared state across commands.
 type App struct {
-	cfg   *config.Config
-	paths *config.Paths
+	cfg     *config.Config
+	paths   *config.Paths
+	format  OutputFormat
+	noASCII bool
+}
+
+// outputFormat reports the effective --format value (validated once in
+// PersistentPreRunE; table when the flag is absent).
+func (a *App) outputFormat() OutputFormat {
+	if a.format == "" {
+		return FormatTable
+	}
+
+	return a.format
 }
 
 // silentMode reports whether output-noise suppression was requested. The
@@ -61,7 +73,15 @@ func New() *cobra.Command {
 			if v, _ := cmd.Flags().GetString("root"); v != "" {
 				cfg.Output.Root = v
 			}
+			rawFormat, _ := cmd.Flags().GetString("format")
+
+			format, err := ParseOutputFormat(rawFormat)
+			if err != nil {
+				return err
+			}
 			app.cfg, app.paths = cfg, paths
+			app.format = format
+			app.noASCII, _ = cmd.Flags().GetBool("no-ascii")
 			return nil
 		},
 	}
@@ -73,6 +93,11 @@ func New() *cobra.Command {
 		"suppress progress UI, per-item lines and summaries (errors and actionable\n"+
 			"results still print; on dl/scan/sync use -s: plain --silent there filters\n"+
 			"silently-sent messages)")
+	root.PersistentFlags().String("format", "table",
+		"output format for chats list, runs list|show, stats, proxy show|test,\nping and auth list: table | json | plain")
+	root.PersistentFlags().Bool("no-ascii", false,
+		"plain ASCII output: line-per-item progress instead of the live redraw UI,\n"+
+			"ASCII-only tables and bars")
 
 	root.AddCommand(
 		authCmd(app),
@@ -86,6 +111,7 @@ func New() *cobra.Command {
 		exportCmd(app),
 		statsCmd(app),
 		proxyCmd(app),
+		pingCmd(app),
 		doctorCmd(app),
 	)
 

@@ -34,12 +34,14 @@ var errDoctorFailed = errors.New("one or more doctor checks failed")
 var errLowDiskSpace = fmt.Errorf("less than %d MiB free under the downloads root", minFreeMiB)
 
 // doctorCheck is one PASS/FAIL line; hint carries the FAIL suggestion,
-// note an extra line printed after PASS.
+// note an extra line printed after PASS and skip renders a non-failing
+// SKIP line when the check cannot run.
 type doctorCheck struct {
 	name string
 	err  error
 	hint string
 	note string
+	skip string
 }
 
 func doctorCmd(app *App) *cobra.Command {
@@ -57,10 +59,15 @@ func doctorCmd(app *App) *cobra.Command {
 				func() doctorCheck {
 					return checkProxy(app.cfg.Net.Proxy, proxySourceLabel(app.cfg.Net.ProxySource), app.cfg.Net.IgnoreEnv)
 				},
+				func() doctorCheck {
+					return checkPing(app.cfg.Net.Proxy, proxySourceLabel(app.cfg.Net.ProxySource))
+				},
 			}
 
-			if err := printLine(cmd, "config:  %s\naccounts: %s\n",
-				configPath(cmd), app.paths.AccountsDir); err != nil {
+			premium := checkPremium(app)
+
+			if err := printLine(cmd, "config:  %s\naccounts: %s\npremium: %s (source: %s)\n",
+				configPath(cmd), app.paths.AccountsDir, yesNo(premium.Premium), premium.Source); err != nil {
 				return fail(cmd, err)
 			}
 
@@ -68,6 +75,15 @@ func doctorCmd(app *App) *cobra.Command {
 
 			for _, check := range checks {
 				result := check()
+
+				if result.skip != "" {
+					if err := printLine(cmd, "SKIP %s: %s\n", result.name, result.skip); err != nil {
+						return fail(cmd, err)
+					}
+
+					continue
+				}
+
 				if result.err != nil {
 					failed++
 
@@ -101,6 +117,36 @@ func doctorCmd(app *App) *cobra.Command {
 
 			return nil
 		},
+	}
+}
+
+// checkPremium resolves the default account's premium state from the
+// account cache alone; doctor never opens a session.
+func checkPremium(app *App) tg.PremiumStatus {
+	return tg.NewAccountManager(app.paths.AccountsDir).AccountPremium(context.Background(), app.cfg.Auth.Account, nil)
+}
+
+// checkPing measures the transport RTT to the primary DC through the
+// effective proxy, best-effort: network failures SKIP, never FAIL.
+func checkPing(proxyURL, source string) doctorCheck {
+	if proxyURL == "" {
+		return doctorCheck{
+			name: "ping dc2 [direct]",
+			skip: "direct connection: configure a proxy to measure latency",
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	defer cancel()
+
+	latency, err := tg.ProbeProxy(ctx, proxyURL)
+	if err != nil {
+		return doctorCheck{name: "ping dc2 [via proxy " + source + "]", skip: err.Error()}
+	}
+
+	return doctorCheck{
+		name: "ping dc2 [via proxy " + source + "]",
+		note: "connect " + latency.Round(time.Millisecond).String(),
 	}
 }
 

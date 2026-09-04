@@ -115,10 +115,18 @@ server quirks that apply to your combination.
 | `profile save \| list \| show \| rm` | named filter presets in config |
 | `export jsonl \| csv` | manifest export |
 | `stats` | per-chat totals |
-| `proxy show \| test` | proxy config and DC probe |
-| `doctor` | config/creds/disk/DB/proxy diagnostics |
+| `proxy show \| test` | proxy config and DC probe (DCs 2-5) |
+| `ping [--dc N\|all]` | connect time + RPC RTT to Telegram DCs via the session |
+| `doctor` | config/creds/disk/DB/proxy diagnostics + premium status |
 
 Chat specs: `all` · `@username` · `t.me/...` link · numeric id · `saved` · glob (`"News*"`).
+
+Global flags:
+
+| Flag | Purpose |
+|---|---|
+| `--format table\|json\|plain` | output format for `chats list`, `runs list\|show`, `stats`, `proxy show\|test`, `ping`, `auth list` (stable JSON field names; `plain` = greppable `key: value` lines) |
+| `--no-ascii` | plain ASCII output: line-per-item progress instead of the live redraw UI, ASCII-only tables and bars |
 
 ## Filter reference
 
@@ -162,6 +170,7 @@ retry_max            = 4
 [download]
 threads     = 4        # ranged parts in parallel per file (1-16)
 connections = 3        # pooled MTProto connections per DC (1-8)
+premium_boost = true   # premium preset (8/8) on auto-detected premium accounts
 
 [output]
 root      = ""                                # "" = ~/.local/share/teleparse/downloads
@@ -193,11 +202,22 @@ Downloads ride **real parallel connections**, not one multiplexed pipe:
   throttle (Telegram Premium removes it). Short waits are auto-slept and shown
   in the live UI as `throttled Ns`; only waits beyond `flood_sleep_threshold`
   park the run.
+- **Premium autodetect**: with `premium_boost = true` (default), teleparse
+  detects Telegram Premium accounts on connect (cached 24h per account) and
+  upgrades the default sizing to the premium preset — 8 pooled connections per
+  DC and 8 threads — matching TDLib's premium download envelope and lifting
+  the account-level media throttle. Explicit `threads`/`connections` you set
+  always win; `auth status` and `doctor` show the detected state and its
+  source. Failed detection falls back to the cache (or non-premium) and never
+  blocks a download.
 - Progress UI: on a TTY `dl`/`sync` render a live per-file view (percent, bar,
   speed, eta, totals); piped output falls back to one line per finished file;
   `-s`/`--silent` suppresses everything but errors and actionable results.
   On `dl`/`scan`/`sync` the plain `--silent` long name stays the
-  silently-sent-messages filter — use `-s` there.
+  silently-sent-messages filter — use `-s` there. `--no-ascii` forces the
+  line-per-item surface. The final summary counts retries
+  (`failed: N, retries: M`), and each failed item prints
+  `FAIL <name> (attempts N): <error>`.
 
 ## Proxies
 
@@ -210,7 +230,8 @@ Downloads ride **real parallel connections**, not one multiplexed pipe:
 | `webproxy://host:443/<secret>?carrier=websocket` | **WEB-proxy v1** (see below) |
 
 Rotate by changing `--proxy`/config and reconnecting — the session survives; **FloodWait does not**
-(it is bound to the account, not the IP). `teleparse proxy test` probes each scheme against a live DC.
+(it is bound to the account, not the IP). `teleparse proxy test` probes each scheme against the
+production DCs (connect time per DC); `teleparse ping` adds RPC RTT using the logged-in session.
 
 ## WEB-proxy v1
 

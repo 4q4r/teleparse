@@ -255,7 +255,7 @@ func executeRun(ctx context.Context, cmd *cobra.Command, app *App, account, prof
 		return previewRun(ctx, cmd, state, runID, collector, targets, mode)
 	}
 
-	return downloadRun(ctx, cmd, state, app, runID, resolver, collector, targets, mode, opts, api, client)
+	return downloadRun(ctx, cmd, state, app, runID, account, resolver, collector, targets, mode, opts, api, client)
 }
 
 // walkCollector accumulates manifest items, walk context and per-chat
@@ -355,8 +355,8 @@ func previewRun(ctx context.Context, cmd *cobra.Command, state *store.Store, run
 }
 
 func downloadRun(ctx context.Context, cmd *cobra.Command, state *store.Store, app *App, runID string,
-	resolver *runResolver, collector *walkCollector, targets []scan.Target, mode runMode,
-	opts filters.Options, api *tgapi.Client, client *telegram.Client,
+	account string, resolver *runResolver, collector *walkCollector, targets []scan.Target,
+	mode runMode, opts filters.Options, api *tgapi.Client, client *telegram.Client,
 ) error {
 	pacer := pace.New(pace.Config{
 		Concurrency:         app.cfg.Pacing.Concurrency,
@@ -367,13 +367,27 @@ func downloadRun(ctx context.Context, cmd *cobra.Command, state *store.Store, ap
 
 	silent := app.silentMode(cmd)
 
-	reporter, closeUI := newDownloadReporter(cmd, silent)
+	reporter, closeUI := newDownloadReporter(cmd, silent, app.noASCII)
 
 	defer closeUI()
 
+	// Premium autodetect: cache-first account lookup that never blocks
+	// downloads; the boost only retunes sizing left at the defaults.
+	premium := tg.NewAccountManager(app.paths.AccountsDir).
+		AccountPremium(ctx, account, client.Self)
+
+	threads, connections := app.cfg.Download.Effective(premium.Premium)
+
+	if !silent && (threads != app.cfg.Download.Threads || connections != app.cfg.Download.Connections) {
+		if err := printLine(cmd, "premium boost: threads %d, connections %d (source: %s)\n",
+			threads, connections, premium.Source); err != nil {
+			return err
+		}
+	}
+
 	// Parallel-connection engine: per-DC media pools with a home-DC
 	// fallback; pool failures degrade to the single primary connection.
-	pools := tg.NewDownloadPools(client, int64(app.cfg.Download.Connections))
+	pools := tg.NewDownloadPools(client, int64(connections))
 
 	defer func() { _ = pools.Close() }()
 
@@ -386,7 +400,7 @@ func downloadRun(ctx context.Context, cmd *cobra.Command, state *store.Store, ap
 		SkipExisting: opts.SkipExisting,
 	}, resolver, reporter)
 	mgr.Fetch = download.ParallelFetch(pools, api, download.ParallelOptions{
-		Threads:  app.cfg.Download.Threads,
+		Threads:  threads,
 		Reporter: reporter,
 	})
 
@@ -431,15 +445,17 @@ func downloadRun(ctx context.Context, cmd *cobra.Command, state *store.Store, ap
 
 // newDownloadReporter picks the progress surface: the bubbletea live view
 // when stdout is a terminal, one line per settled transfer otherwise, and
-// nothing at all in silent mode. The returned closer finalizes the UI.
+// nothing at all in silent mode. --no-ascii forces the line-per-item
+// surface even on terminals (the live view repaints with ANSI escapes).
+// The returned closer finalizes the UI.
 //
 //nolint:ireturn // the Reporter interface is the Manager's progress contract
-func newDownloadReporter(cmd *cobra.Command, silent bool) (download.Reporter, func()) {
+func newDownloadReporter(cmd *cobra.Command, silent, noASCII bool) (download.Reporter, func()) {
 	if silent {
 		return download.NoopReporter{}, func() {}
 	}
 
-	if term.IsTerminal(int(os.Stdout.Fd())) {
+	if !noASCII && term.IsTerminal(int(os.Stdout.Fd())) {
 		live := download.NewLiveReporter(cmd.ErrOrStderr())
 
 		return live, live.Close
@@ -662,8 +678,8 @@ func printCounts(cmd *cobra.Command, collector *walkCollector, targets []scan.Ta
 
 // printSummary renders the final one-line dl/sync outcome.
 func printSummary(cmd *cobra.Command, res download.Result, took time.Duration) error {
-	return printLine(cmd, "downloaded: %d (%s), skipped: %d, failed: %d, took %s\n",
-		res.Downloaded, humanBytes(res.Bytes), res.Skipped, res.Failed, took.Round(time.Second))
+	return printLine(cmd, "downloaded: %d (%s), skipped: %d, failed: %d, retries: %d, took %s\n",
+		res.Downloaded, humanBytes(res.Bytes), res.Skipped, res.Failed, res.Retries, took.Round(time.Second))
 }
 
 func countFor(collector *walkCollector, chatID int64) int {
