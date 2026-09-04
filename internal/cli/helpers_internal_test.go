@@ -362,27 +362,27 @@ func TestRunResolverRefetchPaths(t *testing.T) {
 	assert.ErrorIs(t, err, broken)
 }
 
-func TestStderrProgressRendersEveryNOutcomes(t *testing.T) {
+func TestQuietReporterPrintsLinePerSettledTransfer(t *testing.T) {
 	t.Parallel()
 
 	var buf guardedBuffer
 
-	progress := newStderrProgress(&buf, 2)
+	quiet := download.NewQuietReporter(&buf)
 
-	progress.SetPhase("downloading")
+	quiet.SetPhase("downloading")
+	quiet.Inc("bytes", 128)
+	quiet.ItemStart("1/2/0", "video.mp4", 128, 0)
+	quiet.ItemProgress("1/2/0", 64)
+	quiet.ItemDone("1/2/0", false)
 
-	progress.Inc("bytes", 128)
-	progress.Inc("downloaded", 1)
-	progress.Inc("downloaded", 1)
-	progress.Inc("skipped", 1)
-	progress.Inc("skipped", 1)
-	progress.Inc("failed", 1)
+	quiet.ItemStart("3/4/0", "gone.jpg", 10, 0)
+	quiet.ItemDone("3/4/0", true)
 
 	out := buf.String()
-	assert.Contains(t, out, "--- downloading ---")
-	assert.Contains(t, out, "progress: downloaded=2 skipped=0 failed=0")
-	assert.Contains(t, out, "progress: downloaded=2 skipped=2 failed=0")
-	assert.NotContains(t, out, "failed=1\n", "the last lone outcome stays buffered")
+	assert.Contains(t, out, "done video.mp4\n")
+	assert.Contains(t, out, "FAIL gone.jpg\n")
+	assert.NotContains(t, out, "progress:", "counter lines are gone")
+	assert.NotContains(t, out, "downloading", "phase lines are live-UI only")
 }
 
 // guardedBuffer serializes writes like the real stderr.

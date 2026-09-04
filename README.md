@@ -1,12 +1,11 @@
 # teleparse
 
 <!-- TODO: replace 4q4r/teleparse below with the canonical GitHub repo path once published -->
-[![CI](https://github.com/4q4r/teleparse/actions/workflows/ci.yml/badge.svg)](https://github.com/4q4r/teleparse/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/4q4r/teleparse?display_name=tag&sort=semver)](https://github.com/4q4r/teleparse/releases)
 [![Go Version](https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Lint](https://img.shields.io/badge/golangci--lint-strict%20%200%20findings-success)](https://golangci-lint.run)
-[![Tests](https://img.shields.io/badge/tests-567%20passing%20%2Drace-brightgreen)](#development)
+[![Tests](https://img.shields.io/badge/tests-728%20passing%20%2Drace-brightgreen)](#development)
 [![MTProto](https://img.shields.io/badge/MTProto-gotd%2Ftd%20v0.161.0%20(layer%20228)-8A2BE2)](https://github.com/gotd/td)
 
 **Telegram userbot media parser CLI.** Downloads any media — photos, videos, voice messages,
@@ -22,6 +21,7 @@ SOCKS4/5, HTTP CONNECT, MTProto-proxy (`dd`/`ee` fake-TLS) or the new **WEB-prox
 - [Commands](#commands)
 - [Filter reference](#filter-reference)
 - [Configuration](#configuration)
+- [Speed](#speed)
 - [Proxies](#proxies)
 - [WEB-proxy v1](#web-proxy-v1)
 - [Anti-ban](#anti-ban)
@@ -61,6 +61,7 @@ Releases are cut by [GoReleaser](https://goreleaser.com) on every `v*` tag
 - [Commands](#commands)
 - [Filter reference](#filter-reference)
 - [Configuration](#configuration)
+- [Speed](#speed)
 - [Proxies](#proxies)
 - [WEB-proxy v1](#web-proxy-v1)
 - [Anti-ban](#anti-ban)
@@ -68,6 +69,8 @@ Releases are cut by [GoReleaser](https://goreleaser.com) on every `v*` tag
 - [Architecture](#architecture)
 - [Development](#development)
 - [Limitations](#limitations)
+- [Contributing](#contributing)
+- [License](#license)
 
 ## Quickstart
 
@@ -156,6 +159,10 @@ flood_sleep_threshold = 60   # ≤: auto-sleep, >: park run for `resume`
 requests_per_minute  = 0     # optional global token bucket
 retry_max            = 4
 
+[download]
+threads     = 4        # ranged parts in parallel per file (1-16)
+connections = 3        # pooled MTProto connections per DC (1-8)
+
 [output]
 root      = ""                                # "" = ~/.local/share/teleparse/downloads
 template  = "{chat}/{date:%Y-%m}/{filename}"
@@ -169,6 +176,28 @@ dedupe = "unique-id"
 media = ["video"]
 min_size = "5MB"
 ```
+
+## Speed
+
+Downloads ride **real parallel connections**, not one multiplexed pipe:
+
+- `[download] connections` (1-8, default 3) — one MTProto connection pool per
+  data center, reused by every file routed there; files know their DC from the
+  manifest, unknown DCs start on the home pool and follow a `FILE_MIGRATE`
+  retry to the right pool automatically.
+- `[download] threads` (1-16, default 4) — ranged parts fetched in parallel
+  within one file (512 KiB parts, gotd downloader).
+- Defaults mirror official clients (TDLib = 2 conns/DC); the **turbo preset**
+  for fat pipes is `threads = 8, connections = 6`. Never exceed ~20 connections
+  per DC: past that Telegram answers `FLOOD_PREMIUM_WAIT` — an account-level
+  throttle (Telegram Premium removes it). Short waits are auto-slept and shown
+  in the live UI as `throttled Ns`; only waits beyond `flood_sleep_threshold`
+  park the run.
+- Progress UI: on a TTY `dl`/`sync` render a live per-file view (percent, bar,
+  speed, eta, totals); piped output falls back to one line per finished file;
+  `-s`/`--silent` suppresses everything but errors and actionable results.
+  On `dl`/`scan`/`sync` the plain `--silent` long name stays the
+  silently-sent-messages filter — use `-s` there.
 
 ## Proxies
 
@@ -252,7 +281,7 @@ sequenceDiagram
 go build ./...
 go vet ./...
 golangci-lint run ./...   # strict: 70+ linters, 0 findings required
-go test -race -count=1 ./...      # 567 tests, 11 packages
+go test -race -count=1 ./...      # 728 tests, 11 packages
 govulncheck ./...
 go test -race -tags webproxy_integration ./internal/webproxy/...  # needs docker/git
 make cover                # coverage profile + per-function totals (coverage.out)

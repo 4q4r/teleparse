@@ -22,17 +22,33 @@ var (
 	ErrProfileAbsent     = errors.New("profile not found")
 	ErrBadTildeRoot      = errors.New("cannot resolve ~")
 	ErrNoHomeDir         = errors.New("cannot resolve home directory")
+	ErrBadThreads        = errors.New("must be within 1..16")
+	ErrBadConnections    = errors.New("must be within 1..8")
 )
 
-// Defaults for pacing (see research: conservative anti-ban numbers).
+// Defaults for pacing (see research: conservative anti-ban numbers) and
+// download speed (official clients use 2-3 connections per DC, TDLib 2).
 const (
 	defaultConcurrency       = 3
 	defaultDelayMinSeconds   = 1.0
 	defaultDelayMaxSeconds   = 4.0
 	defaultFloodThresholdSec = 60
 	defaultRetryMax          = 4
+	defaultThreads           = 4
+	defaultConnections       = 3
 	dirPerm                  = 0o700
 	filePerm                 = 0o600
+)
+
+// Hard validation bounds for [download]; the ranges mirror the research
+// consensus: threads beyond 16 or connections beyond 8 per DC only invite
+// FLOOD_PREMIUM_WAIT without adding throughput (community turbo tops out at
+// threads 8 / connections 6-8; never exceed ~20 connections per DC).
+const (
+	threadsMin     = 1
+	threadsMax     = 16
+	connectionsMin = 1
+	connectionsMax = 8
 )
 
 // Paths holds the XDG-style locations used by teleparse, all overridable.
@@ -87,12 +103,21 @@ type Hooks struct {
 	PostDownload []string `toml:"post_download"`
 }
 
+// Download tunes transfer speed: per-file ranged threads and the connection
+// pool size opened per data center. Threads multiply within one file's
+// transfer; connections are shared by every download routed to that DC.
+type Download struct {
+	Threads     int `toml:"threads"`     // ranged parts fetched in parallel per file
+	Connections int `toml:"connections"` // pooled MTProto connections per DC
+}
+
 // Config is the root configuration object.
 type Config struct {
 	Auth     Auth               `toml:"auth"`
 	Net      Net                `toml:"net"`
 	Pacing   Pacing             `toml:"pacing"`
 	Output   Output             `toml:"output"`
+	Download Download           `toml:"download"`
 	Filters  Filters            `toml:"filters"`
 	Hooks    Hooks              `toml:"hooks"`
 	Profiles map[string]Filters `toml:"profiles"`
@@ -162,6 +187,10 @@ func Default() *Config {
 			PartSuffix: ".part",
 			Sha256:     false,
 		},
+		Download: Download{
+			Threads:     defaultThreads,
+			Connections: defaultConnections,
+		},
 		Filters: Filters{
 			Dedupe: "unique-id",
 			Recursion: Recursion{
@@ -182,6 +211,10 @@ func (c *Config) Validate() error {
 	}
 
 	if err := c.validatePacing(); err != nil {
+		return err
+	}
+
+	if err := c.validateDownload(); err != nil {
 		return err
 	}
 
@@ -228,6 +261,18 @@ func (c *Config) validatePacing() error {
 
 	if c.Pacing.RetryMax < 1 {
 		return fmt.Errorf("pacing.retry_max %d: %w", c.Pacing.RetryMax, ErrBadRetryMax)
+	}
+
+	return nil
+}
+
+func (c *Config) validateDownload() error {
+	if c.Download.Threads < threadsMin || c.Download.Threads > threadsMax {
+		return fmt.Errorf("download.threads %d: %w", c.Download.Threads, ErrBadThreads)
+	}
+
+	if c.Download.Connections < connectionsMin || c.Download.Connections > connectionsMax {
+		return fmt.Errorf("download.connections %d: %w", c.Download.Connections, ErrBadConnections)
 	}
 
 	return nil

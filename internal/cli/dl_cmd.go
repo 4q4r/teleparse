@@ -5,10 +5,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"io"
+	"os"
 	"reflect"
 	"strings"
-	"sync"
 	"teleparse/internal/config"
 	"teleparse/internal/download"
 	"teleparse/internal/filters"
@@ -25,14 +24,13 @@ import (
 	toml "github.com/pelletier/go-toml/v2"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+	"golang.org/x/term"
 )
 
-// runIDTimeFormat and runIDSaltBytes shape generated run ids; progressEvery
-// tunes the periodic stderr progress line (every N settled outcomes).
+// runIDTimeFormat and runIDSaltBytes shape generated run ids.
 const (
 	runIDTimeFormat = "20060102-150405"
 	runIDSaltBytes  = 4
-	progressEvery   = 25
 )
 
 // dlRunFlags carries the dl-command knobs beyond the filter surface.
@@ -90,9 +88,19 @@ func dlCmd(app *App) *cobra.Command {
 	cmd.Flags().BoolVar(&flags.countOnly, "count-only", false, "only print per-chat match counts")
 	cmd.Flags().BoolVar(&flags.takeout, "takeout", false, "wrap session in takeout mode (lower flood limits)")
 	cmd.Flags().String("profile", "", "named filter profile overlay")
+	addSilentOutputMirror(cmd)
 	addFilterFlags(cmd, &filterSet)
 
 	return cmd
+}
+
+// addSilentOutputMirror registers the dl-family -s shorthand for output
+// silence; the plain --silent long name belongs to the silently-sent
+// message filter registered by addFilterFlags.
+func addSilentOutputMirror(cmd *cobra.Command) {
+	cmd.Flags().BoolP("silent-output", "s", false,
+		"suppress progress UI, per-item lines and summary (dl-family form of the\n"+
+			"global -s; plain --silent here filters silently-sent messages)")
 }
 
 func scanCmd(app *App) *cobra.Command {
@@ -113,6 +121,7 @@ func scanCmd(app *App) *cobra.Command {
 	cmd.Flags().BoolVar(&flags.explain, "explain", false,
 		"print which filters push down to the server vs run client-side, then proceed")
 	cmd.Flags().BoolVar(&flags.countOnly, "count-only", false, "only print per-chat match counts")
+	addSilentOutputMirror(cmd)
 	addFilterFlags(cmd, &filterSet)
 
 	return cmd
@@ -246,7 +255,7 @@ func executeRun(ctx context.Context, cmd *cobra.Command, app *App, account, prof
 		return previewRun(ctx, cmd, state, runID, collector, targets, mode)
 	}
 
-	return downloadRun(ctx, cmd, state, app, runID, resolver, collector, targets, mode, opts, api)
+	return downloadRun(ctx, cmd, state, app, runID, resolver, collector, targets, mode, opts, api, client)
 }
 
 // walkCollector accumulates manifest items, walk context and per-chat
@@ -347,7 +356,7 @@ func previewRun(ctx context.Context, cmd *cobra.Command, state *store.Store, run
 
 func downloadRun(ctx context.Context, cmd *cobra.Command, state *store.Store, app *App, runID string,
 	resolver *runResolver, collector *walkCollector, targets []scan.Target, mode runMode,
-	opts filters.Options, api *tgapi.Client,
+	opts filters.Options, api *tgapi.Client, client *telegram.Client,
 ) error {
 	pacer := pace.New(pace.Config{
 		Concurrency:         app.cfg.Pacing.Concurrency,
@@ -356,7 +365,17 @@ func downloadRun(ctx context.Context, cmd *cobra.Command, state *store.Store, ap
 		FloodSleepThreshold: secondsDuration(float64(app.cfg.Pacing.FloodSleepThreshold)),
 	})
 
-	reporter := newStderrProgress(cmd.ErrOrStderr(), progressEvery)
+	silent := app.silentMode(cmd)
+
+	reporter, closeUI := newDownloadReporter(cmd, silent)
+
+	defer closeUI()
+
+	// Parallel-connection engine: per-DC media pools with a home-DC
+	// fallback; pool failures degrade to the single primary connection.
+	pools := tg.NewDownloadPools(client, int64(app.cfg.Download.Connections))
+
+	defer func() { _ = pools.Close() }()
 
 	mgr := download.NewManager(state, pacer, download.Config{
 		Output:       app.cfg.Output,
@@ -366,7 +385,10 @@ func downloadRun(ctx context.Context, cmd *cobra.Command, state *store.Store, ap
 		Dedupe:       opts.Dedupe,
 		SkipExisting: opts.SkipExisting,
 	}, resolver, reporter)
-	mgr.Fetch = download.GotdFetch(api)
+	mgr.Fetch = download.ParallelFetch(pools, api, download.ParallelOptions{
+		Threads:  app.cfg.Download.Threads,
+		Reporter: reporter,
+	})
 
 	if err := mgr.Enqueue(ctx, collector.items); err != nil {
 		return finishRunE(ctx, state, runID, err)
@@ -390,22 +412,48 @@ func downloadRun(ctx context.Context, cmd *cobra.Command, state *store.Store, ap
 		return err
 	}
 
-	if err := printSummary(cmd, res, time.Since(started)); err != nil {
-		return err
+	// The live UI prints its own final summary on close; quiet mode keeps
+	// the stdout one-liner; silent prints neither.
+	_, live := reporter.(*download.LiveReporter)
+
+	if !silent && !live {
+		if err := printSummary(cmd, res, time.Since(started)); err != nil {
+			return err
+		}
 	}
 
 	if mode.syncMode {
-		return advanceWatermarks(ctx, cmd, state, res, collector, targets)
+		return advanceWatermarks(ctx, cmd, state, res, collector, targets, silent)
 	}
 
 	return nil
 }
 
+// newDownloadReporter picks the progress surface: the bubbletea live view
+// when stdout is a terminal, one line per settled transfer otherwise, and
+// nothing at all in silent mode. The returned closer finalizes the UI.
+//
+//nolint:ireturn // the Reporter interface is the Manager's progress contract
+func newDownloadReporter(cmd *cobra.Command, silent bool) (download.Reporter, func()) {
+	if silent {
+		return download.NoopReporter{}, func() {}
+	}
+
+	if term.IsTerminal(int(os.Stdout.Fd())) {
+		live := download.NewLiveReporter(cmd.ErrOrStderr())
+
+		return live, live.Close
+	}
+
+	return download.NewQuietReporter(cmd.ErrOrStderr()), func() {}
+}
+
 // advanceWatermarks moves each chat forward to its highest walked message
 // id when that chat saw no failures; failed chats keep their watermark so
-// ClaimPending retries their rows on the next sync.
+// ClaimPending retries their rows on the next sync. Silent mode suppresses
+// the per-chat advancement lines.
 func advanceWatermarks(ctx context.Context, cmd *cobra.Command, state *store.Store,
-	res download.Result, collector *walkCollector, targets []scan.Target,
+	res download.Result, collector *walkCollector, targets []scan.Target, silent bool,
 ) error {
 	for _, target := range targets {
 		highest, seen := collector.maxSeen[target.Chat.ID]
@@ -415,6 +463,10 @@ func advanceWatermarks(ctx context.Context, cmd *cobra.Command, state *store.Sto
 
 		if err := state.AdvanceWatermark(ctx, target.Chat.ID, highest, time.Now()); err != nil {
 			return fmt.Errorf("advance watermark chat %d: %w", target.Chat.ID, err)
+		}
+
+		if silent {
+			continue
 		}
 
 		if err := printLine(cmd, "watermark %d -> %d\n", target.Chat.ID, highest); err != nil {
@@ -541,52 +593,6 @@ func newRunID() (string, error) {
 	}
 
 	return "run-" + time.Now().UTC().Format(runIDTimeFormat) + "-" + hex.EncodeToString(salt), nil
-}
-
-// stderrProgress renders coarse counters to stderr every N outcomes.
-type stderrProgress struct {
-	mu       sync.Mutex
-	out      io.Writer
-	every    int64
-	done     int64
-	skipped  int64
-	failed   int64
-	outcomes int64
-}
-
-func newStderrProgress(out io.Writer, every int64) *stderrProgress {
-	return &stderrProgress{out: out, every: every}
-}
-
-// Inc implements download.Reporter.
-func (p *stderrProgress) Inc(stat string, n int64) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	switch stat {
-	case "downloaded":
-		p.done += n
-	case "skipped":
-		p.skipped += n
-	case "failed":
-		p.failed += n
-	default:
-		return
-	}
-
-	p.outcomes += n
-
-	if p.outcomes%p.every == 0 {
-		_, _ = fmt.Fprintf(p.out, "progress: downloaded=%d skipped=%d failed=%d\n", p.done, p.skipped, p.failed)
-	}
-}
-
-// SetPhase implements download.Reporter.
-func (p *stderrProgress) SetPhase(name string) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	_, _ = fmt.Fprintf(p.out, "--- %s ---\n", name)
 }
 
 // Reporting helpers below render the plan, counts and summary tables.
