@@ -17,6 +17,22 @@ type App struct {
 	paths *config.Paths
 }
 
+// silentMode reports whether output-noise suppression was requested. The
+// dl/scan/sync family carries a local -s mirror (silent-output) because the
+// inherited --silent long name is shadowed there by the silently-sent
+// message filter; on every other command the global --silent/-s wins.
+func (a *App) silentMode(cmd *cobra.Command) bool {
+	if v, err := cmd.Flags().GetBool("silent-output"); err == nil && v {
+		return true
+	}
+
+	if v, err := cmd.Flags().GetBool("silent"); err == nil && v {
+		return true
+	}
+
+	return false
+}
+
 // New builds the root command.
 func New() *cobra.Command {
 	app := &App{}
@@ -53,6 +69,10 @@ func New() *cobra.Command {
 	root.PersistentFlags().String("account", "", "account name (default from config)")
 	root.PersistentFlags().String("proxy", "", "proxy URL: socks5:// socks4:// http:// mtproto:// webproxy://")
 	root.PersistentFlags().String("root", "", "downloads root (overrides config)")
+	root.PersistentFlags().BoolP("silent", "s", false,
+		"suppress progress UI, per-item lines and summaries (errors and actionable\n"+
+			"results still print; on dl/scan/sync use -s: plain --silent there filters\n"+
+			"silently-sent messages)")
 
 	root.AddCommand(
 		authCmd(app),

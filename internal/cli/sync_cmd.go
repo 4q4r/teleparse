@@ -17,6 +17,7 @@ func syncCmd(app *App) *cobra.Command {
 		},
 	}
 	cmd.Flags().String("profile", "", "named filter profile overlay")
+	addSilentOutputMirror(cmd)
 	addFilterFlags(cmd, &filterSet)
 
 	return cmd

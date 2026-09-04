@@ -50,12 +50,14 @@ type Config struct {
 }
 
 // Resolved is the resolver output for one media item: the final path, the
-// optional sidecar metadata, the current file location and a refetch hook
-// for expired file references.
+// optional sidecar metadata, the current file location, the data center the
+// file is stored on (0 when unknown) and a refetch hook for expired file
+// references.
 type Resolved struct {
 	Path     string
 	Meta     *SidecarMeta
 	Location tg.InputFileLocationClass
+	DC       int
 	Refetch  RefetchFunc
 }
 
@@ -86,6 +88,7 @@ type Manager struct {
 	cfg      Config
 	resolve  ItemResolver
 	reporter Reporter
+	items    ItemReporter
 	Fetch    FetchFunc
 	now      func() time.Time
 
@@ -135,9 +138,23 @@ func NewManager(
 		cfg:      cfg,
 		resolve:  resolve,
 		reporter: reporter,
+		items:    asItemReporter(reporter),
 		now:      time.Now,
 		chats:    map[int64]struct{}{},
 	}
+}
+
+// asItemReporter probes the reporter for live-UI capability; plain
+// Reporter implementations opt out by not implementing ItemReporter.
+//
+//nolint:ireturn // the capability probe is the point
+func asItemReporter(reporter Reporter) ItemReporter {
+	item, ok := reporter.(ItemReporter)
+	if !ok {
+		return nil
+	}
+
+	return item
 }
 
 // Enqueue upserts discovered media as queued and remembers the chats they
@@ -344,6 +361,12 @@ func (m *Manager) downloadWithRetries(runCtx, bookCtx context.Context, runID str
 
 	location := resolved.Location
 
+	key := itemKeyOf(item)
+
+	m.itemStart(key, itemLabel(item, finalPath), itemSizeOf(item), offset)
+
+	dest := m.countingAt(key, part)
+
 	attempt := item.Attempts
 
 	var lastErr error
@@ -351,9 +374,11 @@ func (m *Manager) downloadWithRetries(runCtx, bookCtx context.Context, runID str
 	for attempt < m.cfg.RetryMax {
 		attempt++
 
-		err := m.attemptOnce(runCtx, item, part, offset, location)
+		err := m.attemptOnce(runCtx, item, dest, offset, location, resolved)
 		if err == nil {
 			if promoteErr := m.verifyAndPromote(bookCtx, state, item, resolved, part, finalPath); promoteErr == nil {
+				m.itemDone(key, false)
+
 				return
 			} else {
 				err = promoteErr
@@ -385,6 +410,8 @@ func (m *Manager) downloadWithRetries(runCtx, bookCtx context.Context, runID str
 	// the terminal failure is visible to later runs and crash recovery.
 	m.recordFailure(bookCtx, item, lastErr, attempt)
 
+	m.itemDone(key, true)
+
 	state.mutate(func(res *Result) {
 		res.Failed++
 		res.FailedByChat[item.ChatID]++
@@ -396,7 +423,7 @@ func (m *Manager) downloadWithRetries(runCtx, bookCtx context.Context, runID str
 // attemptOnce paces, fetches one ranged transfer and reports the raw error
 // for classification.
 func (m *Manager) attemptOnce(ctx context.Context, item store.MediaItem,
-	part *os.File, offset int64, location tg.InputFileLocationClass,
+	dest io.WriterAt, offset int64, location tg.InputFileLocationClass, resolved Resolved,
 ) error {
 	if err := m.pacer.Acquire(ctx); err != nil {
 		return fmt.Errorf("acquire pace slot for %d/%d: %w", item.ChatID, item.MessageID, err)
@@ -408,9 +435,9 @@ func (m *Manager) attemptOnce(ctx context.Context, item store.MediaItem,
 		return fmt.Errorf("pace before %d/%d: %w", item.ChatID, item.MessageID, err)
 	}
 
-	in := Input{Item: item, Offset: offset, Location: location}
+	in := Input{Item: item, Offset: offset, Location: location, DC: resolved.DC}
 
-	if _, err := m.Fetch(ctx, in, part); err != nil {
+	if _, err := m.Fetch(ctx, in, dest); err != nil {
 		return fmt.Errorf("fetch %d/%d/%d: %w", item.ChatID, item.MessageID, item.MediaIndex, err)
 	}
 
@@ -471,6 +498,8 @@ func (m *Manager) parkRun(bookCtx context.Context, runID string, state *runState
 	item store.MediaItem, err error, attempt, seconds int,
 ) {
 	resumeAt := m.now().Add(time.Duration(seconds) * time.Second)
+
+	m.itemDone(itemKeyOf(item), true)
 
 	m.recordAttempt(bookCtx, item, err, attempt)
 
@@ -699,6 +728,8 @@ func (m *Manager) failItem(ctx context.Context, state *runState,
 ) {
 	m.recordFailure(ctx, item, err, attempts)
 
+	m.itemDone(itemKeyOf(item), true)
+
 	state.mutate(func(res *Result) {
 		res.Failed++
 		res.FailedByChat[item.ChatID]++
@@ -754,6 +785,79 @@ func isFatalTGError(err error) bool {
 	default:
 		return false
 	}
+}
+
+// itemKeyOf builds the stable reporter identity of a media row.
+func itemKeyOf(item store.MediaItem) string {
+	return fmt.Sprintf("%d/%d/%d", item.ChatID, item.MessageID, item.MediaIndex)
+}
+
+// itemLabel picks the live-UI display name: the manifest filename when
+// known, else the final path's base name.
+func itemLabel(item store.MediaItem, finalPath string) string {
+	if item.Filename != nil && *item.Filename != "" {
+		return *item.Filename
+	}
+
+	if base := filepath.Base(finalPath); base != "" && base != "." {
+		return base
+	}
+
+	return fmt.Sprintf("%d_%d_%d", item.ChatID, item.MessageID, item.MediaIndex)
+}
+
+// itemSizeOf dereferences the manifest size, 0 meaning unknown.
+func itemSizeOf(item store.MediaItem) int64 {
+	if item.Size == nil {
+		return 0
+	}
+
+	return *item.Size
+}
+
+// itemStart forwards a transfer registration when the reporter opted in.
+func (m *Manager) itemStart(key, name string, total, offset int64) {
+	if m.items != nil {
+		m.items.ItemStart(key, name, total, offset)
+	}
+}
+
+// itemDone forwards a transfer retirement when the reporter opted in;
+// unknown keys are ignored by reporters, so unconditional emission is safe.
+func (m *Manager) itemDone(key string, failed bool) {
+	if m.items != nil {
+		m.items.ItemDone(key, failed)
+	}
+}
+
+// countingAt wraps dest with byte accounting when the reporter opted in;
+// plain reporters keep the unwrapped destination.
+func (m *Manager) countingAt(key string, dest io.WriterAt) io.WriterAt {
+	if m.items == nil {
+		return dest
+	}
+
+	return countingWriterAt{inner: dest, key: key, sink: m.items}
+}
+
+// countingWriterAt reports every persisted byte delta to the item sink.
+type countingWriterAt struct {
+	inner io.WriterAt
+	key   string
+	sink  ItemReporter
+}
+
+func (w countingWriterAt) WriteAt(chunk []byte, off int64) (int, error) {
+	written, err := w.inner.WriteAt(chunk, off)
+	if written > 0 {
+		w.sink.ItemProgress(w.key, int64(written))
+	}
+
+	if err != nil {
+		return written, fmt.Errorf("counted write at %d: %w", off, err)
+	}
+
+	return written, nil
 }
 
 func dedupeEnabled(mode string) bool {
