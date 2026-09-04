@@ -73,6 +73,7 @@ type Result struct {
 	Downloaded   int64
 	Skipped      int64
 	Failed       int64
+	Retries      int64
 	Bytes        int64
 	Parked       bool
 	ResumeAt     time.Time
@@ -393,6 +394,16 @@ func (m *Manager) downloadWithRetries(runCtx, bookCtx context.Context, runID str
 
 		m.recordAttempt(bookCtx, item, err, attempt)
 
+		// Count only retries that actually follow: the last attempt of an
+		// exhausted ladder never gets one.
+		if attempt < m.cfg.RetryMax {
+			state.mutate(func(res *Result) {
+				res.Retries++
+			})
+
+			m.reporter.Inc("retries", reportEveryAttempts)
+		}
+
 		if err := m.sleepBackoff(runCtx, attempt); err != nil {
 			m.failItem(bookCtx, state, item, err, attempt)
 
@@ -410,7 +421,7 @@ func (m *Manager) downloadWithRetries(runCtx, bookCtx context.Context, runID str
 	// the terminal failure is visible to later runs and crash recovery.
 	m.recordFailure(bookCtx, item, lastErr, attempt)
 
-	m.itemDone(key, true)
+	m.itemFailed(key, attempt, lastErr)
 
 	state.mutate(func(res *Result) {
 		res.Failed++
@@ -728,7 +739,7 @@ func (m *Manager) failItem(ctx context.Context, state *runState,
 ) {
 	m.recordFailure(ctx, item, err, attempts)
 
-	m.itemDone(itemKeyOf(item), true)
+	m.itemFailed(itemKeyOf(item), attempts, err)
 
 	state.mutate(func(res *Result) {
 		res.Failed++
@@ -828,6 +839,19 @@ func (m *Manager) itemDone(key string, failed bool) {
 	if m.items != nil {
 		m.items.ItemDone(key, failed)
 	}
+}
+
+// itemFailed retires a failed transfer: reporters that implement
+// FailureDetailRenderer take over rendering the failure line (and the
+// plain ItemDone call is skipped for them); others get ItemDone(key, true).
+func (m *Manager) itemFailed(key string, attempts int, err error) {
+	if detail, ok := m.reporter.(FailureDetailReporter); ok {
+		detail.ItemFailedDetail(key, attempts, err)
+
+		return
+	}
+
+	m.itemDone(key, true)
 }
 
 // countingAt wraps dest with byte accounting when the reporter opted in;

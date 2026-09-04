@@ -50,6 +50,7 @@ type liveState struct {
 	done          int64
 	skipped       int64
 	failed        int64
+	retries       int64
 	bytes         int64
 	phase         string
 	throttleNote  string
@@ -118,6 +119,8 @@ func (s *liveState) inc(stat string, n int64) {
 		s.skipped += n
 	case "failed":
 		s.failed += n
+	case "retries":
+		s.retries += n
 	case "bytes":
 		s.bytes += n
 	}
@@ -262,8 +265,8 @@ func (s *liveState) totalSamples(now time.Time) []speedSample {
 }
 
 func (s *liveState) summaryLine() string {
-	return fmt.Sprintf("%d done (%s), %d skipped, %d failed in %s",
-		s.done, humanBytes(s.bytes), s.skipped, s.failed,
+	return fmt.Sprintf("%d done (%s), %d skipped, %d failed, %d retries in %s",
+		s.done, humanBytes(s.bytes), s.skipped, s.failed, s.retries,
 		humanDuration(s.now().Sub(s.started).Round(time.Second)))
 }
 
@@ -394,6 +397,13 @@ func (r *LiveReporter) ItemDone(key string, failed bool) {
 	r.program.Send(liveDoneMsg{key: key})
 }
 
+// ItemFailedDetail implements FailureDetailReporter: the live view settles
+// failure counts through the counters, so the detail reduces to retiring
+// the transfer line.
+func (r *LiveReporter) ItemFailedDetail(key string, _ int, _ error) {
+	r.program.Send(liveDoneMsg{key: key})
+}
+
 // Throttled implements ItemReporter by surfacing a server flood wait.
 func (r *LiveReporter) Throttled(seconds int) {
 	r.program.Send(liveThrottleMsg{seconds: seconds})
@@ -457,6 +467,24 @@ func (q *QuietReporter) ItemDone(key string, failed bool) {
 	}
 
 	fmt.Fprintf(q.out, "%s %s\n", prefix, name) //nolint:errcheck // progress output is best-effort
+}
+
+// ItemFailedDetail implements FailureDetailReporter with the terminal
+// failure line: the attempts the retry ladder consumed and the last error.
+func (q *QuietReporter) ItemFailedDetail(key string, attempts int, err error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	name, known := q.names[key]
+	if !known {
+		return
+	}
+
+	delete(q.names, key)
+
+	line := fmt.Sprintf("FAIL %s (attempts %d): %v\n", name, attempts, err)
+
+	fmt.Fprint(q.out, line) //nolint:errcheck // progress output is best-effort
 }
 
 // Throttled implements ItemReporter; flood waits are visible via parking.

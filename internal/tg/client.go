@@ -13,7 +13,6 @@ import (
 	"github.com/gotd/contrib/middleware/floodwait"
 	"github.com/gotd/contrib/middleware/ratelimit"
 	"github.com/gotd/td/telegram"
-	"github.com/gotd/td/telegram/dcs"
 )
 
 // primaryDC is the production DC used for connectivity probes.
@@ -139,21 +138,5 @@ func Run(
 // ProbeProxy dials the primary production DC through the given proxy URL
 // ("" = direct) and reports the round-trip latency.
 func ProbeProxy(ctx context.Context, raw string) (time.Duration, error) {
-	resolver, err := ParseProxyURL(raw)
-	if err != nil {
-		return 0, err
-	}
-
-	started := time.Now()
-
-	conn, err := resolver.Primary(ctx, primaryDC, dcs.Prod())
-	if err != nil {
-		return 0, fmt.Errorf("dial DC %d via %q: %w", primaryDC, raw, err)
-	}
-
-	if err := conn.Close(); err != nil {
-		return 0, fmt.Errorf("close probe connection: %w", err)
-	}
-
-	return time.Since(started), nil
+	return ProbeDC(ctx, raw, primaryDC)
 }

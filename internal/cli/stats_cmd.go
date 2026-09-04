@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"strconv"
 	"teleparse/internal/store"
 	"text/tabwriter"
 
@@ -43,11 +44,107 @@ func runStats(app *App, cmd *cobra.Command, chatID int64) error {
 		return fail(cmd, fmt.Errorf("stats per chat: %w", err))
 	}
 
-	if err := printStatusCounts(cmd, counts); err != nil {
+	if err := renderStats(cmd, counts, perChat, chatID, app.outputFormat()); err != nil {
 		return fail(cmd, err)
 	}
 
-	return printPerChat(cmd, perChat, chatID)
+	return nil
+}
+
+// chatStatJSON is the stable json shape of one per-chat stat row.
+type chatStatJSON struct {
+	ChatID int64  `json:"chat_id"`
+	Title  string `json:"title"`
+	Done   int64  `json:"done"`
+	Bytes  int64  `json:"bytes"`
+}
+
+// statsTotalJSON is the stable json shape of the totals.
+type statsTotalJSON struct {
+	Files int64 `json:"files"`
+	Bytes int64 `json:"bytes"`
+}
+
+// statsJSON is the stable json envelope of the stats command.
+type statsJSON struct {
+	Statuses map[string]int `json:"statuses"`
+	PerChat  []chatStatJSON `json:"per_chat"`
+	Total    statsTotalJSON `json:"total"`
+}
+
+// renderStats prints status counts, per-chat rows and totals in the
+// requested format.
+func renderStats(cmd *cobra.Command, counts map[string]int, stats []store.ChatStats,
+	chatID int64, format OutputFormat,
+) error {
+	if format == FormatJSON {
+		perChat := make([]chatStatJSON, 0, len(stats))
+
+		var total statsTotalJSON
+
+		for _, row := range stats {
+			if chatID != 0 && row.ChatID != chatID {
+				continue
+			}
+
+			perChat = append(perChat, chatStatJSON{
+				ChatID: row.ChatID, Title: row.Title, Done: row.DoneCount, Bytes: row.DoneBytes,
+			})
+
+			total.Files += row.DoneCount
+			total.Bytes += row.DoneBytes
+		}
+
+		return printJSON(cmd, statsJSON{Statuses: counts, PerChat: perChat, Total: total})
+	}
+
+	if format == FormatPlain {
+		return renderStatsPlain(cmd, counts, stats, chatID)
+	}
+
+	if err := printStatusCounts(cmd, counts); err != nil {
+		return err
+	}
+
+	return printPerChat(cmd, stats, chatID)
+}
+
+// renderStatsPlain prints greppable key: value stat lines.
+func renderStatsPlain(cmd *cobra.Command, counts map[string]int, stats []store.ChatStats, chatID int64) error {
+	pairs := make([][2]string, 0, len(counts)+len(stats)*3+2)
+
+	for _, status := range sortedStatuses(counts) {
+		pairs = append(pairs, [2]string{"status." + status, strconv.Itoa(counts[status])})
+	}
+
+	var (
+		totalFiles int64
+		totalBytes int64
+	)
+
+	for _, row := range stats {
+		if chatID != 0 && row.ChatID != chatID {
+			continue
+		}
+
+		pairs = append(pairs,
+			[][2]string{
+				{fmt.Sprintf("chat.%d.title", row.ChatID), row.Title},
+				{fmt.Sprintf("chat.%d.done", row.ChatID), strconv.FormatInt(row.DoneCount, 10)},
+				{fmt.Sprintf("chat.%d.bytes", row.ChatID), strconv.FormatInt(row.DoneBytes, 10)},
+			}...,
+		)
+
+		totalFiles += row.DoneCount
+		totalBytes += row.DoneBytes
+	}
+
+	pairs = append(pairs,
+		[2]string{"total.files", strconv.FormatInt(totalFiles, 10)},
+		[2]string{"total.bytes", strconv.FormatInt(totalBytes, 10)},
+	)
+
+	return printPlainPairs(cmd, pairs)
 }
 
 func printStatusCounts(cmd *cobra.Command, counts map[string]int) error {

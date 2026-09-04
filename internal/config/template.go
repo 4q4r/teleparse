@@ -110,6 +110,11 @@ func defaultTemplate() string {
 # it). Short waits are slept automatically and surfaced in the live UI as
 # "throttled Ns" - they do not park the run.
 
+# premium_boost = true
+# Premium accounts are auto-detected (cached 24h) and upgrade the default
+# sizing to the premium preset (8/8) - TDLib's premium envelope. Explicit
+# threads/connections always win; false pins the defaults.
+
 # [output] controls where and how downloaded files land.
 
 [output]
