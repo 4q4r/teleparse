@@ -1,5 +1,8 @@
 # teleparse
 
+<!-- TODO: replace 4q4r/teleparse below with the canonical GitHub repo path once published -->
+[![CI](https://github.com/4q4r/teleparse/actions/workflows/ci.yml/badge.svg)](https://github.com/4q4r/teleparse/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/4q4r/teleparse?display_name=tag&sort=semver)](https://github.com/4q4r/teleparse/releases)
 [![Go Version](https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Lint](https://img.shields.io/badge/golangci--lint-strict%20%200%20findings-success)](https://golangci-lint.run)
@@ -13,7 +16,47 @@ SOCKS4/5, HTTP CONNECT, MTProto-proxy (`dd`/`ee` fake-TLS) or the new **WEB-prox
 
 ## Contents
 
+- [Installation](#installation)
 - [Quickstart](#quickstart)
+- [The one-liner this was built for](#the-one-liner-this-was-built-for)
+- [Commands](#commands)
+- [Filter reference](#filter-reference)
+- [Configuration](#configuration)
+- [Proxies](#proxies)
+- [WEB-proxy v1](#web-proxy-v1)
+- [Anti-ban](#anti-ban)
+- [State, resume, dedup](#state-resume-dedup)
+- [Architecture](#architecture)
+- [Development](#development)
+- [Limitations](#limitations)
+- [Contributing](#contributing)
+- [License](#license)
+
+## Installation
+
+**Release binaries** (recommended): grab a static binary for your platform
+from the [Releases](https://github.com/4q4r/teleparse/releases) page —
+linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64 — and
+verify it against the published `checksums.txt` (SHA-256):
+
+```bash
+sha256sum -c --ignore-missing teleparse_*_checksums.txt
+```
+
+**From source** (canonical until the module path is published):
+
+```bash
+git clone https://github.com/4q4r/teleparse.git && cd teleparse
+make build          # CGO_ENABLED=0 static binary → ./teleparse
+```
+
+<!-- TODO: once the module path is published (github.com/4q4r/teleparse),
+     replace the clone instructions above with:
+     go install github.com/4q4r/teleparse/cmd/teleparse@latest -->
+
+Releases are cut by [GoReleaser](https://goreleaser.com) on every `v*` tag
+(`.github/workflows/release.yml`).
+
 - [The one-liner this was built for](#the-one-liner-this-was-built-for)
 - [Commands](#commands)
 - [Filter reference](#filter-reference)
@@ -212,8 +255,12 @@ golangci-lint run ./...   # strict: 70+ linters, 0 findings required
 go test -race -count=1 ./...      # 567 tests, 11 packages
 govulncheck ./...
 go test -race -tags webproxy_integration ./internal/webproxy/...  # needs docker/git
+make cover                # coverage profile + per-function totals (coverage.out)
+make check                # fmt + lint + vet + test + vuln in one shot
 CGO_ENABLED=0 go build -ldflags "-X teleparse/internal/cli.version=$(git describe --tags)" -o teleparse ./cmd/teleparse
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development guide.
 
 ## Limitations
 
@@ -224,3 +271,13 @@ CGO_ENABLED=0 go build -ldflags "-X teleparse/internal/cli.version=$(git describ
 - `--albums first` passes all album members per-message (coalescing happens at scan level).
 - Bandwidth-level `--or` predicate groups are not implemented; composition is AND (v1).
 - WEB-proxy is a frozen-v1 PoC protocol; expect drift — integration tests guard what's shipped.
+
+## Contributing
+
+PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md): dev setup, the gate
+(`make check`: fmt + lint + vet + test + vuln, lint must be 0 findings),
+conventional commits, and the `webproxy_integration` test tag.
+
+## License
+
+[MIT](LICENSE) © 2026 teleparse contributors.

@@ -1,0 +1,56 @@
+version: 2
+
+project_name: teleparse
+
+builds:
+  - id: teleparse
+    main: ./cmd/teleparse
+    binary: teleparse
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X teleparse/internal/cli.version={{ .Version }}
+
+archives:
+  - id: default
+    builds:
+      - teleparse
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64{{ else }}{{ .Arch }}{{ end }}
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+      - CHANGELOG.md
+
+checksum:
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  use: git
+  filters:
+    exclude:
+      - "^test:"
+      - "^test\\("
+      - "^chore:"
+      - "^docs:"
+      - "^ci:"
+      - "^build:"
+      - "^[Mm]erge pull request"
+      - "^[Mm]erge branch"
+      - "^[Mm]erge remote-tracking branch"
+      - "^go mod tidy$"
