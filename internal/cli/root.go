@@ -40,6 +40,7 @@ func New() *cobra.Command {
 			}
 			if v, _ := cmd.Flags().GetString("proxy"); v != "" {
 				cfg.Net.Proxy = v
+				cfg.Net.ProxySource = "flag"
 			}
 			if v, _ := cmd.Flags().GetString("root"); v != "" {
 				cfg.Output.Root = v

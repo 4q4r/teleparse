@@ -13,14 +13,15 @@ import (
 
 // Sentinel errors wrapped by dynamic validation messages.
 var (
-	ErrBadCollision   = errors.New("not one of index|overwrite|skip")
-	ErrBadConcurrency = errors.New("must be >= 1")
-	ErrBadDelay       = errors.New("need 0 <= min <= max")
-	ErrBadRetryMax    = errors.New("must be >= 1")
-	ErrBadProxyURL    = errors.New("missing scheme")
-	ErrProfileAbsent  = errors.New("profile not found")
-	ErrBadTildeRoot   = errors.New("cannot resolve ~")
-	ErrNoHomeDir      = errors.New("cannot resolve home directory")
+	ErrBadCollision      = errors.New("not one of index|overwrite|skip")
+	ErrBadConcurrency    = errors.New("must be >= 1")
+	ErrBadDelay          = errors.New("need 0 <= min <= max")
+	ErrBadRetryMax       = errors.New("must be >= 1")
+	ErrBadProxyURL       = errors.New("missing scheme")
+	ErrBadEnvProxyScheme = errors.New("unsupported proxy scheme")
+	ErrProfileAbsent     = errors.New("profile not found")
+	ErrBadTildeRoot      = errors.New("cannot resolve ~")
+	ErrNoHomeDir         = errors.New("cannot resolve home directory")
 )
 
 // Defaults for pacing (see research: conservative anti-ban numbers).
@@ -50,8 +51,15 @@ type Auth struct {
 
 // Net controls connection transport: proxy URL and takeout mode.
 type Net struct {
-	Proxy   string `toml:"proxy"` // socks5:// socks4:// http:// mtproto:// webproxy:// or "" (direct)
-	Takeout bool   `toml:"takeout"`
+	Proxy string `toml:"proxy"` // socks5:// socks4:// http:// mtproto:// webproxy:// or "" (direct)
+	// IgnoreEnv skips automatic pickup of standard proxy environment
+	// variables (HTTPS_PROXY, https_proxy, ALL_PROXY, all_proxy).
+	// TELEPARSE_PROXY is always honored as an explicit app override.
+	IgnoreEnv bool `toml:"ignore_env"`
+	Takeout   bool `toml:"takeout"`
+	// ProxySource reports where the effective proxy came from:
+	// "flag", "env:NAME", "config" or "" (direct). Never read from TOML.
+	ProxySource string `toml:"-"`
 }
 
 // Pacing tunes anti-ban behavior. FloodWait is account-bound: proxy rotation never clears it.
@@ -90,8 +98,9 @@ type Config struct {
 	Profiles map[string]Filters `toml:"profiles"`
 }
 
-// Load reads the TOML config at path (created with defaults if missing),
-// applies TELEPARSE_* env overrides and returns the merged config with paths.
+// Load reads the TOML config at path (created as a fully commented template
+// if missing), applies environment overrides (TELEPARSE_* and the standard
+// proxy variables) and returns the merged config with paths.
 func Load(path string) (*Config, *Paths, error) {
 	if path == "" {
 		path = DefaultConfigPath()
@@ -105,14 +114,20 @@ func Load(path string) (*Config, *Paths, error) {
 			return nil, nil, fmt.Errorf("read config %s: %w", path, err)
 		}
 
-		if err := cfg.save(path); err != nil {
+		if err := writeTemplate(path); err != nil {
 			return nil, nil, fmt.Errorf("create default config %s: %w", path, err)
 		}
 	} else if err := decodeTOML(string(raw), cfg); err != nil {
 		return nil, nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 
-	applyEnv(cfg)
+	if cfg.Net.Proxy != "" {
+		cfg.Net.ProxySource = "config"
+	}
+
+	if err := applyEnv(cfg); err != nil {
+		return nil, nil, fmt.Errorf("invalid env: %w", err)
+	}
 
 	if err := cfg.Validate(); err != nil {
 		return nil, nil, fmt.Errorf("invalid config %s: %w", path, err)

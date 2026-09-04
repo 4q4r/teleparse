@@ -13,6 +13,16 @@ import (
 // proxyProbeTimeout bounds the proxy test dial.
 const proxyProbeTimeout = 5 * time.Second
 
+// proxySourceLabel renders Net.ProxySource for display, mapping the
+// empty source (direct connection) to "direct".
+func proxySourceLabel(source string) string {
+	if source == "" {
+		return "direct"
+	}
+
+	return source
+}
+
 func proxyCmd(app *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "proxy",
@@ -30,7 +40,7 @@ func proxyCmd(app *App) *cobra.Command {
 					proxy = "(direct)"
 				}
 
-				return printLine(cmd, "proxy: %s\n", proxy)
+				return printLine(cmd, "proxy: %s\nsource: %s\n", proxy, proxySourceLabel(app.cfg.Net.ProxySource))
 			},
 		},
 		&cobra.Command{

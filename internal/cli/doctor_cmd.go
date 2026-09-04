@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+	"teleparse/internal/config"
 	"teleparse/internal/tg"
 	"time"
 
@@ -32,11 +33,13 @@ var errDoctorFailed = errors.New("one or more doctor checks failed")
 // rendered from minFreeBytes at the call site.
 var errLowDiskSpace = fmt.Errorf("less than %d MiB free under the downloads root", minFreeMiB)
 
-// doctorCheck is one PASS/FAIL line; hint carries the FAIL suggestion.
+// doctorCheck is one PASS/FAIL line; hint carries the FAIL suggestion,
+// note an extra line printed after PASS.
 type doctorCheck struct {
 	name string
 	err  error
 	hint string
+	note string
 }
 
 func doctorCmd(app *App) *cobra.Command {
@@ -51,7 +54,9 @@ func doctorCmd(app *App) *cobra.Command {
 				func() doctorCheck { return checkWritable("accounts dir", app.paths.AccountsDir) },
 				func() doctorCheck { return checkWritable("state db dir", filepath.Dir(app.paths.StateDB)) },
 				func() doctorCheck { return checkDownloads(app.paths.Downloads) },
-				func() doctorCheck { return checkProxy(app.cfg.Net.Proxy) },
+				func() doctorCheck {
+					return checkProxy(app.cfg.Net.Proxy, proxySourceLabel(app.cfg.Net.ProxySource), app.cfg.Net.IgnoreEnv)
+				},
 			}
 
 			if err := printLine(cmd, "config:  %s\naccounts: %s\n",
@@ -81,6 +86,12 @@ func doctorCmd(app *App) *cobra.Command {
 
 				if err := printLine(cmd, "PASS %s\n", result.name); err != nil {
 					return fail(cmd, err)
+				}
+
+				if result.note != "" {
+					if err := printLine(cmd, "     note: %s\n", result.note); err != nil {
+						return fail(cmd, err)
+					}
 				}
 			}
 
@@ -161,9 +172,9 @@ func checkDownloads(root string) doctorCheck {
 	return doctorCheck{name: "downloads root"}
 }
 
-func checkProxy(proxyURL string) doctorCheck {
+func checkProxy(proxyURL, source string, ignoreEnv bool) doctorCheck {
 	if proxyURL == "" {
-		return doctorCheck{name: "proxy (none configured)"}
+		return doctorCheck{name: "proxy (none configured) [" + source + "]", note: ignoredEnvNote(ignoreEnv)}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
@@ -171,10 +182,24 @@ func checkProxy(proxyURL string) doctorCheck {
 
 	if _, err := tg.ProbeProxy(ctx, proxyURL); err != nil {
 		return doctorCheck{
-			name: "proxy " + proxyURL, err: err,
+			name: "proxy " + proxyURL + " [" + source + "]", err: err,
 			hint: "verify the proxy is reachable, or clear net.proxy / --proxy to go direct",
 		}
 	}
 
-	return doctorCheck{name: "proxy " + proxyURL}
+	return doctorCheck{name: "proxy " + proxyURL + " [" + source + "]"}
+}
+
+// ignoredEnvNote explains a skipped standard proxy environment variable;
+// empty when ignore_env is off or no such variable is set.
+func ignoredEnvNote(ignoreEnv bool) string {
+	if !ignoreEnv {
+		return ""
+	}
+
+	if name := config.StandardProxyEnvName(); name != "" {
+		return "env proxy ignored via net.ignore_env (" + name + " is set)"
+	}
+
+	return ""
 }
