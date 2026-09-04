@@ -32,3 +32,9 @@
 - Приватный репо создан, main запушен. 5 PR смержены: release-infra, download/cli smokes (+2 прод-бага: openPartFile MkdirAll, double-claim race → RecordAttempt), tlmock+scan/tg smokes (doc-accurate), release-hardening (🔴 FloodWait infinite retry → WithMaxWait; de-hardcode; UX Examples; API verify — 0 mismatches), webproxy flake (🔴 прод-рейс EOF/Write gap → writeGate).
 - Аккаунт-левел: GitHub Actions ОТКЛЮЧЕН у пользователя (API "Actions has been disabled for this user") — нужен web-переключатель github.com/settings/actions. CI не гоняется, все ветки верифицированы локально (lint 0, -race).
 - Итог main: 669 тестов, 12 пакетов, lint 0, tlmock-слой (реальный tg.Client поверх fake Invoker), coverage cli 66%, tg 71%, pace 95%, store 89%.
+
+## Волна 4: UX + скорость
+- PR #7: --from/--exclude по id/@username/телефону (точные цифры, без угадывания кода страны)
+- PR #8: -v/-h/-s, LiveReporter (bubbletea, uv-style, TTY-aware), DownloadPools (MediaOnly per-DC, FILE_MIGRATE retry), [download] threads=4/connections=3 (+turbo 8/6), FLOOD_PREMIUM_WAIT как throttle-нотисы. Исследование: без премиума аккаунт-левел троттлинг есть (FLOOD_PREMIUM_WAIT), но 3-8 параллельных соединений дают практический премиум-класс.
+- Actions у аккаунта забанен (навсегда) → верификация локальная; README badge заменён на статические.
+- main: 728+ тестов... (финальный счёт ниже), lint 0.
