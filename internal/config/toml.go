@@ -85,3 +85,8 @@ func fillProfile(dst, base, overlay *Filters) {
 		dst.Recursion = overlay.Recursion
 	}
 }
+
+// Save writes the config as TOML to path with 0600, creating parent dirs.
+func (c *Config) Save(path string) error {
+	return c.save(path)
+}

@@ -22,3 +22,8 @@
 - filters p1 (d8f4400) + p2 (4859123): Context, Compile, Pushdown, ~90 predicate-семейств, 435 тестов всего.
 - Ворота репо: lint 0, build/vet/test -race зелёные.
 - Волна 2: store/pace/export → scan → download+CLI wiring.
+
+## Финал
+- profile save/list/show/rm реализованы (config.Save экспортирован), README с Mermaid+badges+TOC.
+- Ворота финальные: build CGO_ENABLED=0 (21.3MB), vet OK, golangci-lint strict 0, 567 тестов -race ok (10 pkg), govulncheck: 0 в коде/импортах (3 транзитивные не вызываются), doctor exit-семантика верна, smoke profile roundtrip OK.
+- Ворота финальный прогон вебпрокси-интеграции: go test -race -tags webproxy_integration ./internal/webproxy/ (passed у агента; требует docker/git для сборки tproxy-server).

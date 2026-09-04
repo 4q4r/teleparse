@@ -21,15 +21,15 @@ anti-ban pacing, and full proxy support (SOCKS4/5, HTTP CONNECT, MTProto dd+ee, 
 
 ## Phases
 
-- [ ] 0. Foundation: git init, go.mod, layout, spec, lint tooling, README skeleton
-- [ ] 1. Config + CLI skeleton (TOML, profiles, precedence, cobra tree, doctor)
-- [ ] 2. Auth + multi-account (sessions 0600+flock, login flow, Telethon import, chats list)
-- [ ] 3. Scan + filter engine (~150 predicates, pushdown, walker, --explain/--dry-run/--count-only)
-- [ ] 4. Download + state (SQLite WAL, .part resume, dedup, path templates, sidecars, hooks)
-- [ ] 5. Sync/resume/runs/export/stats
-- [ ] 6. Proxies (socks5/4, http CONNECT, mtproto dd/ee, rotation, proxy test)
-- [ ] 7. WEB-proxy v1 (frame codec, WINDOW credits, carriers ws+https, bootstrap, dcs.Resolver)
-- [ ] 8. Anti-ban polish + full quality gates + README
+- [x] 0. Foundation: git init, go.mod, layout, spec, lint tooling, README skeleton
+- [x] 1. Config + CLI skeleton (TOML, profiles, precedence, cobra tree, doctor)
+- [x] 2. Auth + multi-account (sessions 0600+flock, login flow, Telethon import, chats list)
+- [x] 3. Scan + filter engine (~150 predicates, pushdown, walker, --explain/--dry-run/--count-only)
+- [x] 4. Download + state (SQLite WAL, .part resume, dedup, path templates, sidecars, hooks)
+- [x] 5. Sync/resume/runs/export/stats
+- [x] 6. Proxies (socks5/4, http CONNECT, mtproto dd/ee, rotation, proxy test)
+- [x] 7. WEB-proxy v1 (frame codec, WINDOW credits, carriers ws+https, bootstrap, dcs.Resolver)
+- [x] 8. Anti-ban polish + full quality gates + README
 
 ## Decisions
 
@@ -44,3 +44,7 @@ anti-ban pacing, and full proxy support (SOCKS4/5, HTTP CONNECT, MTProto dd+ee, 
 
 | Error | Attempt | Resolution |
 |-------|---------|------------|
+
+## DONE 2026-09-04
+Все 9 фаз (0-8) реализованы. 567 тестов, lint 0, vuln 0 (код), статик-бинарь 21MB.
+Коммиты: 9ca7eaf, e2bc1ad, 4731636 (tg), 5ed2499 (webproxy+интеграция), d8f4400+4859123 (filters), 467085c (store/pace/export), 7b73c4e (scan), b063e45 (download+CLI), финал (profile+README).
