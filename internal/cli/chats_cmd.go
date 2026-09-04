@@ -2,9 +2,9 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"teleparse/internal/tg"
 
@@ -52,7 +52,12 @@ func chatsListCmd(app *App) *cobra.Command {
 					return fmt.Errorf("collect chats: %w", err)
 				}
 
-				return printChats(cmd, filterChatsByType(chats, wanted), asJSON)
+				format := app.outputFormat()
+				if asJSON {
+					format = FormatJSON
+				}
+
+				return renderChats(cmd, filterChatsByType(chats, wanted), format)
 			})
 			if err != nil {
 				return fail(cmd, err)
@@ -183,18 +188,41 @@ func filterChatsByType(chats []tg.ChatInfo, wanted map[string]bool) []tg.ChatInf
 	return filtered
 }
 
-func printChats(cmd *cobra.Command, chats []tg.ChatInfo, asJSON bool) error {
-	if asJSON {
+// chatPlainKeys are the key: value column names of the plain chats render.
+func chatPlainKeys() []string {
+	return []string{"id", "type", "title", "username", "archived", "protected"}
+}
+
+// chatPlainRow renders one chat as a plain value row.
+func chatPlainRow(chat tg.ChatInfo) []string {
+	return []string{
+		strconv.FormatInt(chat.ID, 10), chat.Type, chat.Title, chat.Username,
+		strconv.FormatBool(chat.Archived), strconv.FormatBool(chat.Protected),
+	}
+}
+
+// renderChats prints chats in the requested format; the local --json flag
+// is an alias for --format json.
+func renderChats(cmd *cobra.Command, chats []tg.ChatInfo, format OutputFormat) error {
+	if format == FormatJSON {
 		if len(chats) == 0 {
 			chats = []tg.ChatInfo{}
 		}
 
-		encoded, err := json.MarshalIndent(chats, "", "  ")
-		if err != nil {
-			return fmt.Errorf("encode chats: %w", err)
+		return printJSON(cmd, chats)
+	}
+
+	if format == FormatPlain {
+		if len(chats) == 0 {
+			return printLine(cmd, "no chats\n")
 		}
 
-		return printLine(cmd, "%s\n", encoded)
+		rows := make([][]string, 0, len(chats))
+		for _, chat := range chats {
+			rows = append(rows, chatPlainRow(chat))
+		}
+
+		return printPlainRows(cmd, chatPlainKeys(), rows)
 	}
 
 	if len(chats) == 0 {

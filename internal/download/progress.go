@@ -3,11 +3,22 @@ package download
 // Reporter receives coarse progress updates from a running Manager. The
 // production implementation renders counters; tests collect them.
 type Reporter interface {
-	// Inc adds n to the named counter: downloaded, skipped, failed, bytes,
-	// hook_errors, sidecar_errors or store_errors.
+	// Inc adds n to the named counter: downloaded, skipped, failed,
+	// retries, bytes, hook_errors, sidecar_errors or store_errors.
 	Inc(stat string, n int64)
 	// SetPhase names the current pipeline phase (scanning, downloading).
 	SetPhase(name string)
+}
+
+// FailureDetailReporter receives the terminal outcome of a failed item:
+// the attempts consumed by the retry ladder and the last error. It is an
+// optional capability probed by type assertion; a reporter implementing it
+// takes over the failed-item retirement, so ItemDone(key, true) is then
+// not called for that transfer.
+type FailureDetailReporter interface {
+	// ItemFailedDetail retires key as failed after attempts tries ended
+	// with err.
+	ItemFailedDetail(key string, attempts int, err error)
 }
 
 // ItemReporter receives byte-level transfer updates for the live UI. It is

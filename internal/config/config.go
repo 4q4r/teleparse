@@ -28,27 +28,34 @@ var (
 
 // Defaults for pacing (see research: conservative anti-ban numbers) and
 // download speed (official clients use 2-3 connections per DC, TDLib 2).
+// DefaultThreads and DefaultConnections are exported so callers can detect
+// "left at the defaults" for the premium boost.
 const (
 	defaultConcurrency       = 3
 	defaultDelayMinSeconds   = 1.0
 	defaultDelayMaxSeconds   = 4.0
 	defaultFloodThresholdSec = 60
 	defaultRetryMax          = 4
-	defaultThreads           = 4
-	defaultConnections       = 3
-	dirPerm                  = 0o700
-	filePerm                 = 0o600
+	// DefaultThreads is the built-in per-file ranged-thread count.
+	DefaultThreads = 4
+	// DefaultConnections is the built-in per-DC pooled connection count.
+	DefaultConnections = 3
+	dirPerm            = 0o700
+	filePerm           = 0o600
 )
 
 // Hard validation bounds for [download]; the ranges mirror the research
 // consensus: threads beyond 16 or connections beyond 8 per DC only invite
 // FLOOD_PREMIUM_WAIT without adding throughput (community turbo tops out at
 // threads 8 / connections 6-8; never exceed ~20 connections per DC).
+// Premium accounts may use 8 connections per DC (TDLib premium default).
 const (
-	threadsMin     = 1
-	threadsMax     = 16
-	connectionsMin = 1
-	connectionsMax = 8
+	threadsMin               = 1
+	threadsMax               = 16
+	connectionsMin           = 1
+	connectionsMax           = 8
+	premiumPresetThreads     = 8
+	premiumPresetConnections = 8
 )
 
 // Paths holds the XDG-style locations used by teleparse, all overridable.
@@ -109,6 +116,28 @@ type Hooks struct {
 type Download struct {
 	Threads     int `toml:"threads"`     // ranged parts fetched in parallel per file
 	Connections int `toml:"connections"` // pooled MTProto connections per DC
+	// PremiumBoost upgrades the built-in default sizing to the premium
+	// preset (threads 8 / connections 8) when the account is Telegram
+	// Premium and neither knob was customized in the config file.
+	PremiumBoost bool `toml:"premium_boost"`
+}
+
+// Effective resolves the per-run sizing pair: with the boost enabled, a
+// premium account and both knobs still at the built-in defaults, the
+// premium preset (8/8, the hard cap TDLib premium uses per DC) replaces
+// them. Any custom threads or connections always wins verbatim.
+func (d Download) Effective(premium bool) (int, int) {
+	if d.PremiumBoost && premium && d.usingDefaultSizing() {
+		return premiumPresetThreads, premiumPresetConnections
+	}
+
+	return d.Threads, d.Connections
+}
+
+// usingDefaultSizing reports whether the config left both download knobs at
+// the built-in defaults, the signal the premium boost may retune them.
+func (d Download) usingDefaultSizing() bool {
+	return d.Threads == DefaultThreads && d.Connections == DefaultConnections
 }
 
 // Config is the root configuration object.
@@ -188,8 +217,9 @@ func Default() *Config {
 			Sha256:     false,
 		},
 		Download: Download{
-			Threads:     defaultThreads,
-			Connections: defaultConnections,
+			Threads:      DefaultThreads,
+			Connections:  DefaultConnections,
+			PremiumBoost: true,
 		},
 		Filters: Filters{
 			Dedupe: "unique-id",

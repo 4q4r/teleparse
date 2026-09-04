@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // fakeClock pins the live state's time source; tests advance it explicitly.
@@ -181,15 +182,47 @@ func TestLiveStateSummaryLine(t *testing.T) {
 	state.inc("downloaded", 3)
 	state.inc("skipped", 1)
 	state.inc("failed", 2)
+	state.inc("retries", 5)
 	state.inc("bytes", 2048)
 
 	clock.advance(4 * time.Second)
 
 	summary := state.summaryLine()
 
-	for _, want := range []string{"3 done", "1 skipped", "2 failed", "2.0KiB", "4s"} {
+	for _, want := range []string{"3 done", "1 skipped", "2 failed", "5 retries", "2.0KiB", "4s"} {
 		if !contains(summary, want) {
 			t.Errorf("summary %q missing %q", summary, want)
+		}
+	}
+}
+
+// TestLiveStateRendersASCIIOnly pins the --no-ascii contract: every line
+// the live view can render stays inside plain ASCII whatever the state.
+func TestLiveStateRendersASCIIOnly(t *testing.T) {
+	t.Parallel()
+
+	state, clock := newTestState()
+
+	// Exercise every rendering path: long names (truncation tilde), bars,
+	// percents, speeds, etas, overflow, totals, throttle and summary.
+	state.setPhase("downloading")
+
+	for idx := range maxVisibleItems + 2 {
+		key := "item" + itoaLive(idx)
+
+		state.itemStart(key, "a-very-long-file-name-"+itoaLive(idx)+".bin", 1000, 0)
+		state.itemProgress(key, 400)
+	}
+
+	clock.advance(time.Second)
+
+	state.throttled(5)
+
+	rendered := joinLines(state.lines(40)) + "\n" + state.summaryLine()
+
+	for idx, runeValue := range rendered {
+		if runeValue >= utf8.RuneSelf {
+			t.Fatalf("non-ASCII rune %q at offset %d in rendered view %q", runeValue, idx, rendered)
 		}
 	}
 }

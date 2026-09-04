@@ -61,6 +61,126 @@ func runsCmd(app *App) *cobra.Command {
 	return cmd
 }
 
+// runSummaryJSON is the stable json shape of one run row.
+type runSummaryJSON struct {
+	RunID    string `json:"run_id"`
+	Account  string `json:"account"`
+	Status   string `json:"status"`
+	Started  string `json:"started_at"`
+	ResumeAt string `json:"resume_at"`
+}
+
+// runSummaryRows projects runs onto shared plain/table rows.
+func runSummaryRows(runs []store.Run) ([]string, [][]string) {
+	keys := []string{"run_id", "account", "status", "started_at", "resume_at"}
+
+	rows := make([][]string, 0, len(runs))
+	for _, run := range runs {
+		rows = append(rows, []string{run.RunID, run.Account, run.Status, run.StartedAt, textOrDefault(run.ResumeAt)})
+	}
+
+	return keys, rows
+}
+
+// renderRunsList prints runs in the requested format.
+func renderRunsList(cmd *cobra.Command, runs []store.Run, format OutputFormat) error {
+	if format == FormatJSON {
+		_, rows := runSummaryRows(runs)
+
+		encoded := make([]runSummaryJSON, 0, len(rows))
+		for _, row := range rows {
+			encoded = append(encoded, runSummaryJSON{
+				RunID: row[0], Account: row[1], Status: row[2], Started: row[3], ResumeAt: row[4],
+			})
+		}
+
+		return printJSON(cmd, encoded)
+	}
+
+	if format == FormatPlain {
+		if len(runs) == 0 {
+			return printLine(cmd, "no runs\n")
+		}
+
+		keys, rows := runSummaryRows(runs)
+
+		return printPlainRows(cmd, keys, rows)
+	}
+
+	if len(runs) == 0 {
+		return printLine(cmd, "no runs\n")
+	}
+
+	writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+
+	if _, err := fmt.Fprintln(writer, "RUN\tACCOUNT\tSTATUS\tSTARTED\tRESUME_AT"); err != nil {
+		return fmt.Errorf("write runs header: %w", err)
+	}
+
+	for _, run := range runs {
+		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n",
+			run.RunID, run.Account, run.Status, run.StartedAt, textOrDefault(run.ResumeAt)); err != nil {
+			return fmt.Errorf("write run row: %w", err)
+		}
+	}
+
+	if err := writer.Flush(); err != nil {
+		return fmt.Errorf("flush runs table: %w", err)
+	}
+
+	return nil
+}
+
+// runDetailJSON is the stable json shape of one full run.
+type runDetailJSON struct {
+	RunID      string `json:"run_id"`
+	Account    string `json:"account"`
+	Profile    string `json:"profile"`
+	Status     string `json:"status"`
+	StartedAt  string `json:"started_at"`
+	FinishedAt string `json:"finished_at"`
+	ResumeAt   string `json:"resume_at"`
+	Error      string `json:"error"`
+	FilterJSON string `json:"filter_json"`
+}
+
+// renderRunsShow prints one run in the requested format.
+func renderRunsShow(cmd *cobra.Command, run store.Run, format OutputFormat) error {
+	if format == FormatJSON {
+		return printJSON(cmd, runDetailJSON{
+			RunID:      run.RunID,
+			Account:    run.Account,
+			Profile:    textOrDefault(run.Profile),
+			Status:     run.Status,
+			StartedAt:  run.StartedAt,
+			FinishedAt: textOrDefault(run.FinishedAt),
+			ResumeAt:   textOrDefault(run.ResumeAt),
+			Error:      textOrDefault(run.Error),
+			FilterJSON: run.FilterJSON,
+		})
+	}
+
+	if format == FormatPlain {
+		return printPlainPairs(cmd, [][2]string{
+			{"run_id", run.RunID},
+			{"account", run.Account},
+			{"profile", textOrDefault(run.Profile)},
+			{"status", run.Status},
+			{"started_at", run.StartedAt},
+			{"finished_at", textOrDefault(run.FinishedAt)},
+			{"resume_at", textOrDefault(run.ResumeAt)},
+			{"error", textOrDefault(run.Error)},
+		})
+	}
+
+	detail := fmt.Sprintf("run id:    %s\naccount:   %s\nprofile:   %s\nstatus:    %s\n"+
+		"started:   %s\nfinished:  %s\nresume_at: %s\nerror:     %s\n",
+		run.RunID, run.Account, textOrDefault(run.Profile), run.Status,
+		run.StartedAt, textOrDefault(run.FinishedAt), textOrDefault(run.ResumeAt), textOrDefault(run.Error))
+
+	return printLine(cmd, "%s\nfilters (toml):\n%s\n", detail, run.FilterJSON)
+}
+
 func runsList(app *App, cmd *cobra.Command) error {
 	state, err := openStore(app)
 	if err != nil {
@@ -74,28 +194,7 @@ func runsList(app *App, cmd *cobra.Command) error {
 		return fail(cmd, fmt.Errorf("list runs: %w", err))
 	}
 
-	if len(runs) == 0 {
-		return printLine(cmd, "no runs\n")
-	}
-
-	writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-
-	if _, err := fmt.Fprintln(writer, "RUN\tACCOUNT\tSTATUS\tSTARTED\tRESUME_AT"); err != nil {
-		return fail(cmd, fmt.Errorf("write runs header: %w", err))
-	}
-
-	for _, run := range runs {
-		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n",
-			run.RunID, run.Account, run.Status, run.StartedAt, textOrDefault(run.ResumeAt)); err != nil {
-			return fail(cmd, fmt.Errorf("write run row: %w", err))
-		}
-	}
-
-	if err := writer.Flush(); err != nil {
-		return fail(cmd, fmt.Errorf("flush runs table: %w", err))
-	}
-
-	return nil
+	return renderRunsList(cmd, runs, app.outputFormat())
 }
 
 func runsShow(app *App, cmd *cobra.Command, runID string) error {
@@ -115,12 +214,7 @@ func runsShow(app *App, cmd *cobra.Command, runID string) error {
 		return fail(cmd, fmt.Errorf("run %s: %w", runID, errRunNotFound))
 	}
 
-	detail := fmt.Sprintf("run id:    %s\naccount:   %s\nprofile:   %s\nstatus:    %s\n"+
-		"started:   %s\nfinished:  %s\nresume_at: %s\nerror:     %s\n",
-		run.RunID, run.Account, textOrDefault(run.Profile), run.Status,
-		run.StartedAt, textOrDefault(run.FinishedAt), textOrDefault(run.ResumeAt), textOrDefault(run.Error))
-
-	if err := printLine(cmd, "%s\nfilters (toml):\n%s\n", detail, run.FilterJSON); err != nil {
+	if err := renderRunsShow(cmd, *run, app.outputFormat()); err != nil {
 		return fail(cmd, err)
 	}
 
