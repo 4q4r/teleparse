@@ -469,7 +469,7 @@ func TestPrintPlanCountsSummary(t *testing.T) {
 	cmd, buf = newOutCmd()
 	require.NoError(t, printSummary(cmd, download.Result{
 		Downloaded: 2, Bytes: 3072, Skipped: 1, Failed: 1,
-	}))
+	}, 90*time.Second))
 	assert.Contains(t, buf.String(), "downloaded: 2 (3.0KiB), skipped: 1, failed: 1")
 }
 
