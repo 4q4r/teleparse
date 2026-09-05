@@ -168,9 +168,16 @@ func resumeOne(app *App, cmd *cobra.Command, run store.Run) error {
 		ctx context.Context,
 		client *telegram.Client,
 	) error {
-		return withAPI(ctx, client, cfg.Net.Takeout, func(ctx context.Context, api *tgapi.Client) error {
+		// Cache-only premium resolution (no RPC before the session
+		// opens): an unknown answer defaults the export cap to the base
+		// 2GiB; see runAccountSession.
+		premium := tg.NewAccountManager(app.paths.AccountsDir).
+			AccountPremium(ctx, run.Account, nil)
+
+		return withAPI(ctx, client, cfg.Net.Takeout, premium.Premium, func(ctx context.Context, api *tgapi.Client) error {
 			return executeRun(ctx, cmd, app, run.Account, textOrDefault(run.Profile),
-				opts, plan, payload.Chats, runMode{}, api, client, cfg.Net.Takeout)
+				opts, plan, payload.Chats, runMode{}, api, client, cfg.Net.Takeout,
+				takeoutFileCap(cfg.Net.Takeout, premium.Premium))
 		}, func(finishErr error) {
 			if app.silentMode(cmd) {
 				return

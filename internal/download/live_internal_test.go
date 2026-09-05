@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // fakeClock pins the live state's time source; tests advance it explicitly.
@@ -279,4 +280,55 @@ func TestLiveStateSurfacesFailureReasons(t *testing.T) {
 
 	summary := state.summaryLine()
 	assert.Contains(t, summary, "FAIL rpc error code 403: TAKEOUT_REQUIRED")
+}
+
+// TestTruncateLiveTailKeepsTheTail pins the failure-reason truncation:
+// the tail survives (Telegram errors end with their machine code), the
+// head is dropped behind a tilde, and the width budget holds.
+func TestTruncateLiveTailKeepsTheTail(t *testing.T) {
+	t.Parallel()
+
+	long := "fetch 1/2/0: download document/42: " +
+		strings.Repeat("context ", 20) + "rpc error code 403: TAKEOUT_FILE_TOO_BIG"
+
+	got := truncateLiveTail(long, liveReasonWidth)
+
+	assert.True(t, strings.HasSuffix(got, "TAKEOUT_FILE_TOO_BIG"), "the rpc code must stay visible, got %q", got)
+	assert.Contains(t, got, "~")
+	assert.LessOrEqual(t, len(got), liveReasonWidth)
+
+	short := "rpc error code 403: TAKEOUT_FILE_TOO_BIG"
+	assert.Equal(t, short, truncateLiveTail(short, liveReasonWidth), "short reasons pass through")
+}
+
+// TestLiveStateFailLinesKeepTheErrorTail pins the rendered FAIL lines:
+// both the settled live view and the final summary keep the error tail
+// (the actionable code) instead of the truncated head.
+func TestLiveStateFailLinesKeepTheErrorTail(t *testing.T) {
+	t.Parallel()
+
+	state, _ := newTestState()
+
+	state.itemStart("k", "video.mp4", 100, 0)
+
+	reason := strings.Repeat("context ", 30) + "rpc error code 403: TAKEOUT_FILE_TOO_BIG"
+	state.itemFailed("k", reason)
+
+	rendered := state.lines(60)
+
+	failLine := ""
+	for _, line := range rendered {
+		if strings.HasPrefix(line, failMarker) {
+			failLine = line
+
+			break
+		}
+	}
+
+	require.NotEmpty(t, failLine, "the live view must render a FAIL line, got %v", rendered)
+	assert.True(t, strings.HasSuffix(failLine, "TAKEOUT_FILE_TOO_BIG"),
+		"the live FAIL line must end with the rpc code, got %q", failLine)
+
+	summary := state.summaryLine()
+	assert.Contains(t, summary, "TAKEOUT_FILE_TOO_BIG", "the summary must keep the error tail")
 }
