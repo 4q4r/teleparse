@@ -322,9 +322,7 @@ func (s *liveState) summaryLine() string {
 		s.done, humanBytes(s.bytes), s.skipped, s.failed, s.retries,
 		humanDuration(s.now().Sub(s.started).Round(time.Second)))
 
-	parts := append([]string{line}, prefixedFailures(s.failReasons)...)
-
-	return strings.Join(parts, "")
+	return line + strings.Join(prefixedFailures(s.failReasons), "")
 }
 
 // prefixedFailures renders newline-prefixed failure reasons for the summary.

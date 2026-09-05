@@ -246,7 +246,7 @@ func runAccountSession(
 				ctx context.Context,
 				api *tgapi.Client,
 			) error {
-				return executeRun(ctx, cmd, app, account, profileName, opts, plan, specs, mode, api, client, takeoutMode)
+				return executeRun(ctx, cmd, app, account, profileName, opts, plan, specs, mode, api, client, takeoutEnabled)
 			}, func(finishErr error) {
 				if app.silentMode(cmd) {
 					return
@@ -667,17 +667,14 @@ func downloadRun(ctx context.Context, cmd *cobra.Command, state *store.Store, ap
 	var pools download.InvokerSource
 
 	if takeoutActive {
-		if !app.silentMode(cmd) {
-			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s\n", app.errStyle.Dim(
-				"downloads ride the takeout session (single connection; parallel pools resume on non-takeout runs)")); err != nil {
-				return fmt.Errorf("print takeout download notice: %w", err)
-			}
+		if err := printTakeoutPoolsNotice(cmd, app, silent); err != nil {
+			return err
 		}
 	} else {
 		poolSet := tg.NewDownloadPools(client, int64(connections))
 		defer func() { _ = poolSet.Close() }()
 
-		pools = poolSet //nolint:gosimple // concrete type satisfies the seam
+		pools = poolSet
 	}
 
 	mgr := download.NewManager(state, pacer, download.Config{
@@ -742,6 +739,25 @@ func downloadRun(ctx context.Context, cmd *cobra.Command, state *store.Store, ap
 	// Every completed download run refreshes the cache: full walks walked
 	// everything, incremental walks everything past the watermark.
 	return advanceWatermarks(ctx, cmd, state, res, collector, targets, silent)
+}
+
+// takeoutPoolsNotice explains the single-connection download mode under an
+// active takeout session.
+const takeoutPoolsNotice = "downloads ride the takeout session " +
+	"(single connection; parallel pools resume on non-takeout runs)"
+
+// printTakeoutPoolsNotice tells the user downloads skip parallel pools for
+// the takeout rate-limit path; silent mode stays quiet.
+func printTakeoutPoolsNotice(cmd *cobra.Command, app *App, silent bool) error {
+	if silent {
+		return nil
+	}
+
+	if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s\n", app.errStyle.Dim(takeoutPoolsNotice)); err != nil {
+		return fmt.Errorf("print takeout download notice: %w", err)
+	}
+
+	return nil
 }
 
 // newDownloadReporter picks the progress surface: the bubbletea live view
