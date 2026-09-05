@@ -96,13 +96,13 @@ func TestScanStateLinesRenderHeadAndTrail(t *testing.T) {
 	// elapsed 2s + 3s + 7.3s = 12.3s.
 	for _, want := range []string{
 		"scanning 2/61", "matched 165 files", "ETA 2m27s", "12.3s",
-		"|- News Channel: 37 matches", "`- Docs: 128 matches",
+		"last chats:", "News Channel (37)", "Docs (128)",
 	} {
 		assert.Contains(t, joined, want)
 	}
 
 	// The newest chat renders last.
-	assert.Greater(t, strings.Index(joined, "`- Docs"), strings.Index(joined, "|- News Channel"))
+	assert.Greater(t, strings.Index(joined, "Docs (128)"), strings.Index(joined, "News Channel (37)"))
 }
 
 func TestScanStateLinesShowSingleTrailEntry(t *testing.T) {
@@ -113,8 +113,7 @@ func TestScanStateLinesShowSingleTrailEntry(t *testing.T) {
 	walkFake(state, clock, "Only", 4, time.Second)
 
 	joined := strings.Join(state.lines(NewStyler(false)), "\n")
-	assert.Contains(t, joined, "`- Only: 4 matches")
-	assert.NotContains(t, joined, "|-")
+	assert.Contains(t, joined, "last chats: Only (4)")
 }
 
 func TestScanStateLinesUnknownETARendersPlaceholder(t *testing.T) {
@@ -134,10 +133,16 @@ func TestScanStateLinesTruncateLongTitles(t *testing.T) {
 	walkFake(state, clock, strings.Repeat("x", scanTitleWidth+10), 1, time.Second)
 
 	joined := strings.Join(state.lines(NewStyler(false)), "\n")
-	trail := strings.TrimSuffix(strings.TrimPrefix(strings.Split(joined, "\n")[1], "`- "), ": 1 matches")
 
-	assert.Len(t, trail, scanTitleWidth)
-	assert.Contains(t, trail, "x~", "truncation keeps a tilde marker")
+	second := strings.Split(joined, "\n")[1]
+	prefix := "last chats: "
+
+	require.Contains(t, second, prefix)
+
+	entry := strings.TrimSuffix(strings.TrimPrefix(second, prefix), " (1)")
+
+	assert.Len(t, entry, scanTitleWidth)
+	assert.Contains(t, entry, "x~", "truncation keeps a tilde marker")
 }
 
 func TestScanStateLinesColoredWhenStylerEnabled(t *testing.T) {
@@ -210,7 +215,7 @@ func TestScanModelAppliesChatMessages(t *testing.T) {
 
 	view := next.View().Content
 	assert.Contains(t, view, "scanning 1/3")
-	assert.Contains(t, view, "`- News: 7 matches")
+	assert.Contains(t, view, "last chats: News (7)")
 }
 
 func TestScanModelTickReschedules(t *testing.T) {
