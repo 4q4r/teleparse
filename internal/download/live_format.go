@@ -56,10 +56,20 @@ func positionOf(current, total int64) string {
 	return humanBytes(current) + "/" + humanBytes(total)
 }
 
-// percentOf renders the completed share of total.
+// percentOf renders the completed share of total, clamped to [0%, 100%]:
+// over-counted deltas from any accounting hiccup must never render beyond
+// the total.
 func percentOf(current, total int64) string {
 	if total <= 0 {
 		return ""
+	}
+
+	if current > total {
+		current = total
+	}
+
+	if current < 0 {
+		current = 0
 	}
 
 	return strconv.FormatInt(current*livePercentMax/total, 10) + "%"

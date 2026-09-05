@@ -244,6 +244,33 @@ func (s *Store) MarkFailed(ctx context.Context, chatID, messageID int64, mediaIn
 	return nil
 }
 
+// MarkInterrupted records a cancellation-interrupted transfer as still
+// owned by its run (status stays downloading, so the live feeder cannot
+// re-claim it) with its retry budget restored: attempts reset to zero
+// because a cancellation — user interrupt, park or dropped connection — is
+// never chargeable to the item. The next run reclaims the row through
+// ResetDownloading exactly like crash recovery.
+func (s *Store) MarkInterrupted(ctx context.Context, chatID, messageID int64, mediaIndex int,
+	errText string,
+) error {
+	var errPtr *string
+
+	if errText != "" {
+		errPtr = &errText
+	}
+
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE media
+		SET status = ?, last_error = ?, attempts = ?, updated_at = ?
+		WHERE chat_id = ? AND message_id = ? AND media_index = ?`,
+		StatusDownloading, errPtr, 0, nowUTC(), chatID, messageID, mediaIndex)
+	if err != nil {
+		return fmt.Errorf("mark interrupted %d/%d/%d: %w", chatID, messageID, mediaIndex, err)
+	}
+
+	return nil
+}
+
 // Counts returns the number of media rows per status, including zeroed
 // entries for every media lifecycle status.
 func (s *Store) Counts(ctx context.Context) (map[string]int, error) {
