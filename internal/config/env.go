@@ -14,7 +14,8 @@ const EnvVarPrefix = "TELEPARSE"
 // the standard proxy environment when no explicit override is set.
 // Supported: TELEPARSE_ACCOUNT, TELEPARSE_PROXY, TELEPARSE_TAKEOUT,
 // TELEPARSE_CONCURRENCY, TELEPARSE_ROOT, TELEPARSE_PROFILE (profile name applied by caller).
-// API credentials never live in the config file: TELEPARSE_API_ID / TELEPARSE_API_HASH.
+// API credentials are resolved separately (see credentials.go): environment
+// first, then the credentials file.
 func applyEnv(cfg *Config) error {
 	if v := env("ACCOUNT"); v != "" {
 		cfg.Auth.Account = v

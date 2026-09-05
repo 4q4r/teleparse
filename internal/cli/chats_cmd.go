@@ -39,12 +39,17 @@ func chatsListCmd(app *App) *cobra.Command {
 		Short:   "List dialogs (all chats this account can see)",
 		Example: "  teleparse chats list --type channel,forum\n  teleparse chats list --json",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			creds, err := app.resolveCreds()
+			if err != nil {
+				return fail(cmd, err)
+			}
+
 			wanted := map[string]bool{}
 			for _, chatType := range types {
 				wanted[strings.TrimSpace(chatType)] = true
 			}
 
-			err := tg.Run(cmd.Context(), app.cfg.Auth.Account, app.cfg, app.paths, func(
+			err = tg.Run(cmd.Context(), app.cfg.Auth.Account, creds, app.cfg, app.paths, func(
 				ctx context.Context,
 				client *telegram.Client,
 			) error {
@@ -82,13 +87,18 @@ func chatsShowCmd(app *App) *cobra.Command {
 		Example: "  teleparse chats show @durov\n  teleparse chats show 123456789",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			creds, err := app.resolveCreds()
+			if err != nil {
+				return fail(cmd, err)
+			}
+
 			ref := args[0]
 
 			if ref == "saved" {
-				return showSavedMessages(cmd, app)
+				return showSavedMessages(cmd, app, creds)
 			}
 
-			err := tg.Run(cmd.Context(), app.cfg.Auth.Account, app.cfg, app.paths, func(
+			err = tg.Run(cmd.Context(), app.cfg.Auth.Account, creds, app.cfg, app.paths, func(
 				ctx context.Context,
 				client *telegram.Client,
 			) error {
@@ -114,7 +124,7 @@ func chatsShowCmd(app *App) *cobra.Command {
 	}
 }
 
-func showSavedMessages(cmd *cobra.Command, app *App) error {
+func showSavedMessages(cmd *cobra.Command, app *App, creds tg.Creds) error {
 	manager := tg.NewAccountManager(app.paths.AccountsDir)
 
 	storage, err := manager.Storage(app.cfg.Auth.Account)
@@ -122,7 +132,7 @@ func showSavedMessages(cmd *cobra.Command, app *App) error {
 		return fail(cmd, err)
 	}
 
-	err = tg.Run(cmd.Context(), app.cfg.Auth.Account, app.cfg, app.paths, func(
+	err = tg.Run(cmd.Context(), app.cfg.Auth.Account, creds, app.cfg, app.paths, func(
 		ctx context.Context,
 		client *telegram.Client,
 	) error {

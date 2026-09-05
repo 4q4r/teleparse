@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strconv"
 	"time"
 
 	"github.com/4q4r/teleparse/internal/config"
@@ -19,13 +18,6 @@ import (
 // primaryDC is the production DC used for connectivity probes.
 const primaryDC = 2
 
-// Environment variables carrying the Telegram API credentials, derived from
-// the single TELEPARSE prefix registry in internal/config.
-const (
-	envAPIID   = config.EnvVarPrefix + "_API_ID"
-	envAPIHash = config.EnvVarPrefix + "_API_HASH"
-)
-
 // secondsPerMinute converts requests-per-minute into a per-second rate.
 const secondsPerMinute = 60.0
 
@@ -35,20 +27,12 @@ const secondsPerMinute = 60.0
 // arguments to >= 1s anyway).
 const minFloodSleepThreshold = 1
 
-// CredsFromEnv reads TELEPARSE_API_ID and TELEPARSE_API_HASH, failing with
-// ErrAPICredsMissing when either is unset.
-func CredsFromEnv() (int64, string, error) {
-	rawID, rawHash := os.Getenv(envAPIID), os.Getenv(envAPIHash)
-	if rawID == "" || rawHash == "" {
-		return 0, "", fmt.Errorf("%s/%s: %w", envAPIID, envAPIHash, ErrAPICredsMissing)
-	}
-
-	apiID, err := strconv.ParseInt(rawID, 10, 64)
-	if err != nil {
-		return 0, "", fmt.Errorf("%s %q: %w: %w", envAPIID, rawID, ErrAPICredsMissing, err)
-	}
-
-	return apiID, rawHash, nil
+// Creds is a resolved Telegram API credential pair. The cli layer resolves
+// it through internal/config (environment first, credentials file second)
+// and passes it down; tg never reads credential sources itself.
+type Creds struct {
+	APIID   int64
+	APIHash string
 }
 
 // BuildMiddlewares assembles the request pipeline: floodwait always, plus the
@@ -83,11 +67,12 @@ func BuildMiddlewares(pacing config.Pacing) []telegram.Middleware {
 func Run(
 	ctx context.Context,
 	account string,
+	creds Creds,
 	cfg *config.Config,
 	paths *config.Paths,
 	run func(ctx context.Context, client *telegram.Client) error,
 ) error {
-	return RunWithUpdates(ctx, account, cfg, paths, nil, run)
+	return RunWithUpdates(ctx, account, creds, cfg, paths, nil, run)
 }
 
 // RunWithUpdates is Run with a Telegram update handler attached to the client
@@ -96,14 +81,14 @@ func Run(
 func RunWithUpdates(
 	ctx context.Context,
 	account string,
+	creds Creds,
 	cfg *config.Config,
 	paths *config.Paths,
 	handler telegram.UpdateHandler,
 	run func(ctx context.Context, client *telegram.Client) error,
 ) error {
-	apiID, apiHash, err := CredsFromEnv()
-	if err != nil {
-		return err
+	if creds.APIID == 0 || creds.APIHash == "" {
+		return ErrCredsUnset
 	}
 
 	manager := NewAccountManager(paths.AccountsDir)
@@ -134,7 +119,7 @@ func RunWithUpdates(
 		}
 	}()
 
-	client := telegram.NewClient(int(apiID), apiHash, telegram.Options{
+	client := telegram.NewClient(int(creds.APIID), creds.APIHash, telegram.Options{
 		SessionStorage: storage,
 		Resolver:       resolver,
 		Middlewares:    BuildMiddlewares(cfg.Pacing),

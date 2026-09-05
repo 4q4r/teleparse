@@ -101,12 +101,13 @@ func (promptAuth) SignUp(_ context.Context) (auth.UserInfo, error) {
 func Login(
 	ctx context.Context,
 	account string,
+	creds Creds,
 	phone string,
 	ask Prompter,
 	cfg *config.Config,
 	paths *config.Paths,
 ) error {
-	return Run(ctx, account, cfg, paths, func(ctx context.Context, client *telegram.Client) error {
+	return Run(ctx, account, creds, cfg, paths, func(ctx context.Context, client *telegram.Client) error {
 		flow := auth.NewFlow(promptAuth{phone: phone, ask: ask}, auth.SendCodeOptions{})
 
 		if err := client.Auth().IfNecessary(ctx, flow); err != nil {
@@ -118,8 +119,8 @@ func Login(
 }
 
 // Logout terminates the server-side session and deletes the local account data.
-func Logout(ctx context.Context, account string, cfg *config.Config, paths *config.Paths) error {
-	if err := Run(ctx, account, cfg, paths, func(ctx context.Context, client *telegram.Client) error {
+func Logout(ctx context.Context, account string, creds Creds, cfg *config.Config, paths *config.Paths) error {
+	if err := Run(ctx, account, creds, cfg, paths, func(ctx context.Context, client *telegram.Client) error {
 		if _, err := client.API().AuthLogOut(ctx); err != nil {
 			return fmt.Errorf("auth log out: %w", err)
 		}
