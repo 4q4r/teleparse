@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/4q4r/teleparse/internal/tg"
 
@@ -18,6 +19,21 @@ import (
 
 // errNotAuthorized marks a missing session without aborting other output.
 var errNotAuthorized = errors.New("account is not logged in")
+
+// errQRExclusive rejects combining the QR method with the other login paths.
+var errQRExclusive = errors.New("--qr cannot be combined with --phone, --import-telethon or --import-tdesktop")
+
+// errQRTimeoutMin rejects --timeout values below the 30s floor.
+var errQRTimeoutMin = errors.New("--timeout must be at least 30s")
+
+// errQRTimeoutNeedsQR rejects --timeout without the QR login it bounds.
+var errQRTimeoutNeedsQR = errors.New("--timeout requires --qr")
+
+// QR login deadline defaults and bounds.
+const (
+	qrTimeoutDefault = 5 * time.Minute
+	qrTimeoutMin     = 30 * time.Second
+)
 
 // stdPrompter asks on stdout/stdin, hiding secrets when the terminal allows.
 type stdPrompter struct {
@@ -95,16 +111,48 @@ func authLoginCmd(app *App) *cobra.Command {
 	var (
 		phone      string
 		importPath string
+		tdataDir   string
+		useQR      bool
+		qrTimeout  time.Duration
 	)
 
 	cmd := &cobra.Command{
 		Use:   "login",
-		Short: "Interactive login: phone, code, optional 2FA password",
+		Short: "Interactive login: phone, code, optional 2FA password, or QR",
 		Example: "  teleparse auth login\n" +
 			"  teleparse auth login --phone +15551234567\n" +
-			"  teleparse auth login --import-telethon old.session.sqlite",
+			"  teleparse auth login --qr --timeout 2m\n" +
+			"  teleparse auth login --import-telethon old.session.sqlite\n" +
+			"  teleparse auth login --import-tdesktop ~/tdata/tdata",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			account := app.cfg.Auth.Account
+
+			if cmd.Flags().Changed("timeout") && !useQR {
+				return fail(cmd, fmt.Errorf("%s: %w", qrTimeout, errQRTimeoutNeedsQR))
+			}
+
+			if qrTimeout < qrTimeoutMin {
+				return fail(cmd, fmt.Errorf("%s: %w", qrTimeout, errQRTimeoutMin))
+			}
+
+			if useQR && (phone != "" || importPath != "" || tdataDir != "") {
+				return fail(cmd, errQRExclusive)
+			}
+
+			if tdataDir != "" {
+				storage, err := tg.NewAccountManager(app.paths.AccountsDir).Storage(account)
+				if err != nil {
+					return fail(cmd, err)
+				}
+
+				if err := tg.TDesktopSessionImport(cmd.Context(), tdataDir, newStdPrompter(), storage); err != nil {
+					return fail(cmd, err)
+				}
+
+				if err := printLine(cmd, "imported tdata session for account %s\n", account); err != nil {
+					return fail(cmd, err)
+				}
+			}
 
 			if importPath != "" {
 				storage, err := tg.NewAccountManager(app.paths.AccountsDir).Storage(account)
@@ -121,6 +169,21 @@ func authLoginCmd(app *App) *cobra.Command {
 				}
 			}
 
+			if useQR {
+				info, err := tg.QRLogin(cmd.Context(), account, tg.QROptions{
+					Timeout: qrTimeout,
+					ASCII:   app.noASCII,
+					TTY:     term.IsTerminal(int(os.Stderr.Fd())),
+					Out:     cmd.ErrOrStderr(),
+				}, app.cfg, app.paths)
+				if err != nil {
+					return fail(cmd, err)
+				}
+
+				return printLine(cmd, "account %s is logged in via QR (user %d, %s)\n",
+					account, info.ID, strings.TrimSpace(info.FirstName+" "+info.LastName))
+			}
+
 			if err := tg.Login(cmd.Context(), account, phone, newStdPrompter(), app.cfg, app.paths); err != nil {
 				return fail(cmd, err)
 			}
@@ -130,6 +193,11 @@ func authLoginCmd(app *App) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&phone, "phone", "", "phone number in +E.164 format (asked interactively when empty)")
 	cmd.Flags().StringVar(&importPath, "import-telethon", "", "import a Telethon .session SQLite file before login")
+	cmd.Flags().StringVar(&tdataDir, "import-tdesktop",
+		"", "import a Telegram Desktop tdata directory before login (multiple accounts: pick interactively)")
+	cmd.Flags().BoolVar(&useQR, "qr", false, "log in by scanning a QR code with Telegram on another device")
+	cmd.Flags().DurationVar(&qrTimeout, "timeout", qrTimeoutDefault,
+		"QR login timeout (minimum 30s; the token auto-refreshes while waiting)")
 
 	return cmd
 }

@@ -19,6 +19,7 @@ SOCKS4/5, HTTP CONNECT, MTProto-proxy (`dd`/`ee` fake-TLS) or the new **WEB-prox
 - [Quickstart](#quickstart)
 - [The one-liner this was built for](#the-one-liner-this-was-built-for)
 - [Commands](#commands)
+- [Authentication](#authentication)
 - [Filter reference](#filter-reference)
 - [Configuration](#configuration)
 - [Speed](#speed)
@@ -99,6 +100,7 @@ export TELEPARSE_API_ID=123456
 export TELEPARSE_API_HASH=abcdef1234567890
 
 teleparse auth login                     # phone → code → 2FA (session in ~/.config/teleparse)
+teleparse auth login --qr                # QR login: approve from Telegram on another device
 teleparse auth login --account spare     # second account; use --account spare|all anywhere
 teleparse chats list --type private      # see what's accessible
 teleparse scan all --media photo --last 7d           # dry-run: plan only
@@ -124,7 +126,9 @@ server quirks that apply to your combination.
 | Command | Purpose |
 |---|---|
 | `auth login \| logout \| status \| list` | multi-account sessions (0600, flock, stable device identity) |
+| `auth login --qr [--timeout 5m]` | QR-code login: scan with Telegram on another device (auto-refreshing token) |
 | `auth login --import-telethon session.sqlite` | migrate a Telethon session's auth key |
+| `auth login --import-tdesktop <tdata-dir>` | migrate a Telegram Desktop tdata account (pick interactively if several) |
 | `chats list \| show` | dialogs with types/usernames/protected flags |
 | `scan [CHATS] [FILTERS]` | `dl --dry-run`: writes manifest, downloads nothing |
 | `dl [CHATS] [FILTERS]` | download; `--account a,b\|all`, `--takeout`, `--count-only` |
@@ -146,6 +150,17 @@ Global flags:
 |---|---|
 | `--format table\|json\|plain` | output format for `chats list`, `runs list\|show`, `stats`, `proxy show\|test`, `ping`, `auth list` (stable JSON field names; `plain` = greppable `key: value` lines) |
 | `--no-ascii` | plain ASCII output: line-per-item progress instead of the live redraw UI, ASCII-only tables and bars |
+
+## Authentication
+
+| Method | Command | Notes |
+|---|---|---|
+| Phone + code + 2FA password | `teleparse auth login [--phone +15551234567]` | full interactive flow; the 2FA password is prompted only when the account has one; SRP is handled by gotd |
+| QR code | `teleparse auth login --qr [--timeout 5m]` | approve from Telegram on another device: Settings → Devices → Link Desktop Device; the token auto-refreshes on expiry; with `--no-ascii` or a non-TTY stderr only the clickable `tg://login?token=...` URL is printed |
+| Telethon session import | `teleparse auth login --import-telethon session.sqlite` | carries the auth key over; peer caches rebuild lazily |
+| Telegram Desktop tdata import | `teleparse auth login --import-tdesktop <tdata-dir>` | via gotd's tdesktop decoder; multiple stored accounts are listed for an interactive pick; passcode-protected tdata is not supported |
+
+All methods converge on the same per-account session store (`~/.config/teleparse/accounts/<name>/session.json`, 0600), so `--qr`, imports and phone login are interchangeable per account.
 
 ## Filter reference
 
