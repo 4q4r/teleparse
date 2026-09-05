@@ -3,6 +3,7 @@ package download
 import (
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -357,10 +358,13 @@ func NewLiveReporter(out io.Writer) *LiveReporter {
 
 	model := liveModel{state: state}
 
+	// TERM_PROGRAM=Apple_Terminal suppresses bubbletea's DECRQM capability
+	// query so terminal replies never leak into the shell on fast exits.
 	program := tea.NewProgram(model,
 		tea.WithOutput(out),
 		tea.WithInput(nil),
 		tea.WithoutSignalHandler(),
+		tea.WithEnvironment(append(os.Environ(), "TERM_PROGRAM=Apple_Terminal")),
 	)
 
 	go func() {

@@ -228,10 +228,14 @@ func newScanProgress(cmd *cobra.Command, app *App, total int) *scanProgress {
 	if !app.noASCII && term.IsTerminal(int(os.Stderr.Fd())) {
 		state := newScanState(time.Now, total, app.noASCII)
 
+		// TERM_PROGRAM=Apple_Terminal suppresses bubbletea's DECRQM
+		// capability query (mode 2026/2027): on fast abnormal exits the
+		// terminal reply otherwise leaks into the user's shell line.
 		program := tea.NewProgram(scanModel{state: state, styler: app.errStyle},
 			tea.WithOutput(cmd.ErrOrStderr()),
 			tea.WithInput(nil),
 			tea.WithoutSignalHandler(),
+			tea.WithEnvironment(append(os.Environ(), "TERM_PROGRAM=Apple_Terminal")),
 		)
 
 		go func() {
