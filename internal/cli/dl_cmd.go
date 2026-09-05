@@ -1111,15 +1111,21 @@ func printPlan(cmd *cobra.Command, collector *walkCollector) error {
 // printSummary renders the final one-line dl/sync outcome; the linked
 // counter appears only when hardlink dedupe served occurrences this run.
 func printSummary(cmd *cobra.Command, res download.Result, took time.Duration) error {
-	if res.Linked > 0 {
-		return printLine(cmd,
-			"downloaded: %d (%s), linked: %d, skipped: %d, failed: %d, retries: %d, took %s\n",
-			res.Downloaded, humanBytes(res.Bytes), res.Linked, res.Skipped, res.Failed, res.Retries,
-			took.Round(time.Second))
+	interrupted := ""
+	if res.Interrupted > 0 {
+		interrupted = fmt.Sprintf(", interrupted: %d (resumable)", res.Interrupted)
 	}
 
-	return printLine(cmd, "downloaded: %d (%s), skipped: %d, failed: %d, retries: %d, took %s\n",
-		res.Downloaded, humanBytes(res.Bytes), res.Skipped, res.Failed, res.Retries, took.Round(time.Second))
+	if res.Linked > 0 {
+		return printLine(cmd,
+			"downloaded: %d (%s), linked: %d, skipped: %d, failed: %d%s, retries: %d, took %s\n",
+			res.Downloaded, humanBytes(res.Bytes), res.Linked, res.Skipped, res.Failed, interrupted,
+			res.Retries, took.Round(time.Second))
+	}
+
+	return printLine(cmd, "downloaded: %d (%s), skipped: %d, failed: %d%s, retries: %d, took %s\n",
+		res.Downloaded, humanBytes(res.Bytes), res.Skipped, res.Failed, interrupted, res.Retries,
+		took.Round(time.Second))
 }
 
 func countFor(collector *walkCollector, chatID int64) int {

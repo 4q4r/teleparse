@@ -52,6 +52,7 @@ type liveState struct {
 	done          int64
 	skipped       int64
 	failed        int64
+	interrupted   int64
 	retries       int64
 	bytes         int64
 	phase         string
@@ -156,6 +157,8 @@ func (s *liveState) inc(stat string, n int64) {
 		s.skipped += n
 	case "failed":
 		s.failed += n
+	case "interrupted":
+		s.interrupted += n
 	case "retries":
 		s.retries += n
 	case "bytes":
@@ -257,21 +260,29 @@ func (s *liveState) lines(width int) []string {
 }
 
 // itemLine renders one active transfer: name, ASCII bar, percent, speed,
-// position over total and eta when both are known.
+// position over total and eta when both are known. The rendered position
+// clamps at the total so a mid-flight over-count can never paint more than
+// a full bar.
 func (s *liveState) itemLine(item *liveItem, now time.Time, width int) string {
 	name := truncateLive(item.name, liveNameWidth)
 
 	rate := speed(item.samples, liveSpeedWindow, now)
 
+	current := item.current
+
+	if item.total > 0 && current > item.total {
+		current = item.total
+	}
+
 	parts := []string{name}
 
 	if item.total > 0 {
-		parts = append(parts, bar(item.current, item.total), percentOf(item.current, item.total))
+		parts = append(parts, bar(current, item.total), percentOf(current, item.total))
 	}
 
-	parts = append(parts, humanRate(rate), positionOf(item.current, item.total))
+	parts = append(parts, humanRate(rate), positionOf(current, item.total))
 
-	if remaining := item.total - item.current; item.total > 0 && rate > 0 && remaining > 0 {
+	if remaining := item.total - current; item.total > 0 && rate > 0 && remaining > 0 {
 		parts = append(parts, "eta "+humanDuration(time.Duration(float64(time.Second)*float64(remaining)/rate)))
 	}
 
@@ -335,6 +346,10 @@ func (s *liveState) summaryLine() string {
 	line := fmt.Sprintf("%d done (%s), %d skipped, %d failed, %d retries in %s",
 		s.done, humanBytes(s.bytes), s.skipped, s.failed, s.retries,
 		humanDuration(s.now().Sub(s.started).Round(time.Second)))
+
+	if s.interrupted > 0 {
+		line += fmt.Sprintf(", interrupted: %d (resumable)", s.interrupted)
+	}
 
 	return line + strings.Join(prefixedFailures(s.failReasons), "")
 }
@@ -494,6 +509,13 @@ func (r *LiveReporter) ItemFailedDetail(key string, _ int, err error) {
 	r.program.Send(liveFailMsg{key: key, reason: truncateLiveTail(errString(err), liveReasonWidth)})
 }
 
+// ItemInterrupted implements InterruptedReporter: the transfer settles
+// without a FAIL reason — interrupted items stay resumable and surface
+// through the interrupted counter only.
+func (r *LiveReporter) ItemInterrupted(key string) {
+	r.program.Send(liveDoneMsg{key: key})
+}
+
 // Throttled implements ItemReporter by surfacing a server flood wait.
 func (r *LiveReporter) Throttled(seconds int) {
 	r.program.Send(liveThrottleMsg{seconds: seconds})
@@ -575,6 +597,22 @@ func (q *QuietReporter) ItemFailedDetail(key string, attempts int, err error) {
 	line := fmt.Sprintf("FAIL %s (attempts %d): %v\n", name, attempts, err)
 
 	fmt.Fprint(q.out, line) //nolint:errcheck // progress output is best-effort
+}
+
+// ItemInterrupted implements InterruptedReporter: one honest line for a
+// canceled-but-resumable transfer, retired without a FAIL reason.
+func (q *QuietReporter) ItemInterrupted(key string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	name, known := q.names[key]
+	if !known {
+		return
+	}
+
+	delete(q.names, key)
+
+	fmt.Fprintf(q.out, "interrupted %s\n", name) //nolint:errcheck // progress output is best-effort
 }
 
 // Throttled implements ItemReporter; flood waits are visible via parking.
