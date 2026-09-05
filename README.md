@@ -34,13 +34,19 @@ SOCKS4/5, HTTP CONNECT, MTProto-proxy (`dd`/`ee` fake-TLS) or the new **WEB-prox
 
 ## Installation
 
-**Release binaries** (recommended): grab a static binary for your platform
+## Installation
+
+**Release binaries** (recommended): grab a bare static binary for your platform
 from the [Releases](https://github.com/4q4r/teleparse/releases) page —
-linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64 — and
-verify it against the published `checksums.txt` (SHA-256):
+`teleparse_Linux_x86_64`, `teleparse_Darwin_arm64.exe`-style names — and
+verify it against the published `checksums.txt` (SHA-256). Archives with
+bundled docs (LICENSE/README/CHANGELOG) are attached alongside.
+
+One-liner install on linux/amd64:
 
 ```bash
-sha256sum -c --ignore-missing teleparse_*_checksums.txt
+curl -fsSL https://github.com/4q4r/teleparse/releases/latest/download/teleparse_Linux_x86_64 \
+  -o teleparse && chmod +x teleparse && ./teleparse -v
 ```
 
 **From source** (canonical until the module path is published):
