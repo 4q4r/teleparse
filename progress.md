@@ -44,3 +44,8 @@
 - goreleaser v2: 6 таргетов (linux/darwin/windows × amd64/arm64), archives+checksums, GH_TOKEN через gh auth token (Actions забанен — релиз собран локально).
 - https://github.com/4q4r/teleparse/releases/tag/v0.1.0 — верифицировано: sha256 ЦЕЛ, бинарь запускается, version 0.1.0.
 - Финал: lint 0, 832+ тестов, кросс-компиляция 6/6.
+
+## v0.1.1: go install
+- Модуль → github.com/4q4r/teleparse, effectiveVersion() через ReadBuildInfo, README install-секция.
+- Отладка go-install: 3 слоя кэша Go (mod/download/vcs, все read-only) держали переписанный тег. Рецепт в памяти.
+- Верифицировано: ~/go/bin/teleparse -v → v0.1.1.
