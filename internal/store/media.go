@@ -5,13 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
-
-	"modernc.org/sqlite"
 )
-
-// constraintUnique is SQLITE_CONSTRAINT_UNIQUE as reported by modernc sqlite.
-const constraintUnique = 2067
 
 // mediaColumns lists every media column in scan order.
 const mediaColumns = `
@@ -72,12 +66,16 @@ type ChatStats struct {
 // UpsertMedia inserts a media row or, when the same (chat, message, index)
 // already exists, updates only mutable progress: status, attempts,
 // last_error, path, bytes_done, sha256 and updated_at. Discovery metadata
-// stays as first recorded. It wraps ErrDuplicateFile when a different
-// message already tracks the same unique (media_class, media_id) file.
-func (s *Store) UpsertMedia(ctx context.Context, item *MediaItem) error {
+// stays as first recorded. When a different message already tracks the same
+// unique (media_class, media_id) file — the same Telegram file forwarded
+// into another chat — nothing is written and stored reports false: the
+// first occurrence wins, so re-walks stay idempotent instead of aborting
+// the run. Both conflicts are resolved inside one statement, which makes
+// the duplicate outcome race-free by construction.
+func (s *Store) UpsertMedia(ctx context.Context, item *MediaItem) (bool, error) {
 	item.UpdatedAt = nowUTC()
 
-	_, err := s.db.ExecContext(ctx, `
+	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO media (`+mediaColumns+`)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(chat_id, message_id, media_index) DO UPDATE SET
@@ -87,22 +85,23 @@ func (s *Store) UpsertMedia(ctx context.Context, item *MediaItem) error {
 			path = excluded.path,
 			bytes_done = excluded.bytes_done,
 			sha256 = excluded.sha256,
-			updated_at = excluded.updated_at`,
+			updated_at = excluded.updated_at
+		ON CONFLICT(media_class, media_id) DO NOTHING`,
 		item.ChatID, item.MessageID, item.MediaIndex, item.MediaClass, item.MediaID,
 		item.Mime, item.Size, item.Date, item.SenderID, item.Filename, item.GroupedID,
 		item.Status, item.Attempts, item.LastError, item.Path, item.BytesDone, item.Sha256,
 		item.UpdatedAt)
 	if err != nil {
-		if isUniqueViolation(err) {
-			return fmt.Errorf("media %s/%d at %d/%d/%d: %w: %w",
-				item.MediaClass, item.MediaID, item.ChatID, item.MessageID, item.MediaIndex,
-				ErrDuplicateFile, err)
-		}
-
-		return fmt.Errorf("upsert media %d/%d/%d: %w", item.ChatID, item.MessageID, item.MediaIndex, err)
+		return false, fmt.Errorf("upsert media %d/%d/%d: %w", item.ChatID, item.MessageID, item.MediaIndex, err)
 	}
 
-	return nil
+	changed, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("count upserted media %d/%d/%d: %w",
+			item.ChatID, item.MessageID, item.MediaIndex, err)
+	}
+
+	return changed > 0, nil
 }
 
 // MediaByFile returns the media row owning the unique (class, media_id)
@@ -412,15 +411,4 @@ func rowFromItem(item *MediaItem) MediaRow {
 		Path:       item.Path,
 		Sha256:     item.Sha256,
 	}
-}
-
-// isUniqueViolation reports whether err is a SQLite unique-constraint error.
-func isUniqueViolation(err error) bool {
-	var sqlErr *sqlite.Error
-
-	if errors.As(err, &sqlErr) && sqlErr.Code() == constraintUnique {
-		return true
-	}
-
-	return strings.Contains(err.Error(), "UNIQUE constraint failed")
 }

@@ -197,7 +197,8 @@ func TestUpsertMediaIdempotencyKeepsMetadata(t *testing.T) {
 	item.Size = ptr(int64(2048))
 	item.Filename = ptr("a.jpg")
 
-	require.NoError(t, st.UpsertMedia(ctx, item))
+	_, err := st.UpsertMedia(ctx, item)
+	require.NoError(t, err)
 
 	got, found, err := st.MediaByFile(ctx, "photo", 555)
 	require.NoError(t, err)
@@ -215,7 +216,8 @@ func TestUpsertMediaIdempotencyKeepsMetadata(t *testing.T) {
 	refresh.Attempts = 2
 	refresh.BytesDone = 512
 
-	require.NoError(t, st.UpsertMedia(ctx, refresh))
+	_, err = st.UpsertMedia(ctx, refresh)
+	require.NoError(t, err)
 
 	got, found, err = st.MediaByFile(ctx, "photo", 555)
 	require.NoError(t, err)
@@ -228,24 +230,54 @@ func TestUpsertMediaIdempotencyKeepsMetadata(t *testing.T) {
 	assert.Equal(t, int64(512), got.BytesDone, "mutable progress must update")
 }
 
-func TestUpsertMediaDuplicateFile(t *testing.T) {
+func TestUpsertMediaDuplicateFileIsBenignSkip(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
 	st := openStore(t)
 
-	require.NoError(t, st.UpsertMedia(ctx, media(1, 10, "photo", 555)))
+	first := media(1, 10, "photo", 555)
+	first.Status = store.StatusQueued
 
-	err := st.UpsertMedia(ctx, media(1, 99, "photo", 555))
-	require.Error(t, err)
-	require.ErrorIs(t, err, store.ErrDuplicateFile)
+	stored, err := st.UpsertMedia(ctx, first)
+	require.NoError(t, err)
+	assert.True(t, stored, "first sighting writes the row")
+
+	// The same unique file forwarded into a second chat: the upsert must
+	// never abort the run; the existing row stays untouched (first wins).
+	second := media(2, 99, "photo", 555)
+	second.Status = store.StatusQueued
+
+	stored, err = st.UpsertMedia(ctx, second)
+	require.NoError(t, err, "a duplicate file must be a benign skip, not an error")
+	assert.False(t, stored, "the duplicate sighting reports nothing stored")
 
 	got, found, err := st.MediaByFile(ctx, "photo", 555)
 	require.NoError(t, err)
 	require.True(t, found)
+	assert.Equal(t, int64(1), got.ChatID, "original row wins")
 	assert.Equal(t, int64(10), got.MessageID, "original row wins")
 
-	absent, found, err := st.MediaByFile(ctx, "document", 555)
+	// Re-sighting the SAME message stays a progress update, not a duplicate.
+	refresh := media(1, 10, "photo", 555)
+	refresh.Status = store.StatusDone
+
+	stored, err = st.UpsertMedia(ctx, refresh)
+	require.NoError(t, err)
+	assert.True(t, stored, "same-message re-sighting updates the row")
+
+	got, found, err = st.MediaByFile(ctx, "photo", 555)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, store.StatusDone, got.Status)
+
+	// Different media classes may reuse the same numeric id.
+	other := media(1, 11, "document", 555)
+	stored, err = st.UpsertMedia(ctx, other)
+	require.NoError(t, err)
+	assert.True(t, stored, "class-scoped uniqueness keeps distinct rows")
+
+	absent, found, err := st.MediaByFile(ctx, "video", 555)
 	require.NoError(t, err)
 	assert.False(t, found)
 	assert.Nil(t, absent)
@@ -269,12 +301,14 @@ func TestClaimResetMarkFlows(t *testing.T) {
 	m4.Attempts = 2
 
 	for _, item := range []*store.MediaItem{m1, m2, m3, m4} {
-		require.NoError(t, st.UpsertMedia(ctx, item))
+		_, err := st.UpsertMedia(ctx, item)
+		require.NoError(t, err)
 	}
 
 	other := media(9, 1, "photo", 901)
 	other.Status = store.StatusQueued
-	require.NoError(t, st.UpsertMedia(ctx, other))
+	_, err := st.UpsertMedia(ctx, other)
+	require.NoError(t, err)
 
 	claimed, err := st.ClaimPending(ctx, chat, 2, 3)
 	require.NoError(t, err)
@@ -371,13 +405,15 @@ func TestStatsPerChat(t *testing.T) {
 		done(3, 1, 31, 7),
 		media(1, 3, "photo", 13),
 	} {
-		require.NoError(t, st.UpsertMedia(ctx, item))
+		_, err := st.UpsertMedia(ctx, item)
+		require.NoError(t, err)
 	}
 
 	failed := media(1, 4, "photo", 14)
 	failed.Status = store.StatusFailed
 	failed.Size = ptr(int64(999))
-	require.NoError(t, st.UpsertMedia(ctx, failed))
+	_, err := st.UpsertMedia(ctx, failed)
+	require.NoError(t, err)
 
 	stats, err := st.StatsPerChat(ctx)
 	require.NoError(t, err)
@@ -406,8 +442,10 @@ func TestListMediaRows(t *testing.T) {
 	bare.Filename = ptr("b.bin")
 	bare.Status = store.StatusQueued
 
-	require.NoError(t, st.UpsertMedia(ctx, full))
-	require.NoError(t, st.UpsertMedia(ctx, bare))
+	_, err := st.UpsertMedia(ctx, full)
+	require.NoError(t, err)
+	_, err = st.UpsertMedia(ctx, bare)
+	require.NoError(t, err)
 
 	rows, err := st.ListMediaRows(ctx, 0)
 	require.NoError(t, err)

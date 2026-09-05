@@ -83,6 +83,28 @@ func TestRenderTemplateFilenameFallback(t *testing.T) {
 	assert.Equal(t, "file_1234", got)
 }
 
+func TestRenderTemplateChatTitleFallback(t *testing.T) {
+	t.Parallel()
+
+	// Blank, whitespace and sanitize-to-empty titles must fall back to
+	// chat_<id> so {chat} never renders an empty path segment.
+	cases := map[string]string{
+		"":     "chat_42",
+		"   ":  "chat_42",
+		"..//": "chat_42",
+		"News": "News",
+	}
+
+	for title, want := range cases {
+		fctx := templateContext()
+		fctx.Chat.Title = title
+
+		got, err := download.RenderTemplate("{chat}/{msgid}{ext}", fctx, fctx.File)
+		require.NoError(t, err, "title %q", title)
+		assert.Equal(t, want+"/1234.zip", got, "title %q", title)
+	}
+}
+
 func TestRenderTemplateFilenameSanitization(t *testing.T) {
 	t.Parallel()
 

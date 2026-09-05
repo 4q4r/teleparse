@@ -20,7 +20,8 @@ func TestRecordAttemptKeepsRowUnclaimable(t *testing.T) {
 
 	item := media(7, 1, "document", 101)
 	item.Status = store.StatusQueued
-	require.NoError(t, st.UpsertMedia(ctx, item))
+	_, err := st.UpsertMedia(ctx, item)
+	require.NoError(t, err)
 
 	claimed, err := st.ClaimPending(ctx, 7, 10, 3)
 	require.NoError(t, err)
@@ -58,7 +59,8 @@ func TestClaimPendingExcludesQueuedRowsAtMaxAttempts(t *testing.T) {
 	exhausted := media(3, 1, "photo", 11)
 	exhausted.Status = store.StatusQueued
 	exhausted.Attempts = 5
-	require.NoError(t, st.UpsertMedia(ctx, exhausted))
+	_, err := st.UpsertMedia(ctx, exhausted)
+	require.NoError(t, err)
 
 	claimed, err := st.ClaimPending(ctx, 3, 10, 5)
 	require.NoError(t, err)
@@ -84,7 +86,8 @@ func TestResetDownloadingOnlyTouchesDownloadingRows(t *testing.T) {
 		seed(1, 3, 103, store.StatusFailed),
 		seed(1, 4, 104, store.StatusDone),
 	} {
-		require.NoError(t, st.UpsertMedia(ctx, item))
+		_, err := st.UpsertMedia(ctx, item)
+		require.NoError(t, err)
 	}
 
 	reset, err := st.ResetDownloading(ctx)
@@ -184,7 +187,7 @@ func TestClosedStoreFailsLoudly(t *testing.T) {
 		"upsert chat":     func() error { return st.UpsertChat(ctx, store.Chat{ChatID: 1, Type: "channel"}) },
 		"watermark":       func() error { _, err := st.Watermark(ctx, 1); return err },
 		"advance wm":      func() error { return st.AdvanceWatermark(ctx, 1, 2, time.Now()) },
-		"upsert media":    func() error { return st.UpsertMedia(ctx, media(1, 1, "photo", 1)) },
+		"upsert media":    func() error { _, err := st.UpsertMedia(ctx, media(1, 1, "photo", 1)); return err },
 		"media by file":   func() error { _, _, err := st.MediaByFile(ctx, "photo", 1); return err },
 		"claim pending":   func() error { _, err := st.ClaimPending(ctx, 1, 1, 1); return err },
 		"mark done":       func() error { return st.MarkDone(ctx, 1, 1, 0, "p", nil) },

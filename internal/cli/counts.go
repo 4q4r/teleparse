@@ -24,6 +24,7 @@ type countTotals struct {
 	chats         int
 	chatsWithHits int
 	files         int
+	duplicates    int
 }
 
 // countJSON is the --format json envelope of the counts table.
@@ -32,6 +33,7 @@ type countJSON struct {
 	TotalChats       int            `json:"total_chats"`
 	ChatsWithMatches int            `json:"chats_with_matches"`
 	TotalMatches     int            `json:"total_matches"`
+	Duplicates       int            `json:"duplicates"`
 }
 
 // countRowJSON is one chat entry of the json counts envelope.
@@ -48,10 +50,11 @@ const countsTableColumnPad = 2
 // printCounts renders per-chat match counts in the requested output
 // format: a padded table (dim header, green counts, dim zero rows, bold
 // TOTAL row) by default, stable-field json, or greppable key: value
-// blocks. Colors apply only to the table format.
-func printCounts(cmd *cobra.Command, app *App, collector *walkCollector, targets []scan.Target) error {
+// blocks. duplicates counts files this run already tracked under another
+// message; colors apply only to the table format.
+func printCounts(cmd *cobra.Command, app *App, collector *walkCollector, targets []scan.Target, duplicates int) error {
 	rows := countRows(collector, targets)
-	totals := countTotalsFor(rows)
+	totals := countTotalsFor(rows, duplicates)
 
 	switch app.outputFormat() {
 	case FormatJSON:
@@ -63,6 +66,17 @@ func printCounts(cmd *cobra.Command, app *App, collector *walkCollector, targets
 	}
 }
 
+// chatLabel renders a chat's display name, falling back to chat_<id> when
+// the title is blank so progress lines, tables and summaries never show an
+// empty name.
+func chatLabel(chatID int64, title string) string {
+	if strings.TrimSpace(title) == "" {
+		return "chat_" + strconv.FormatInt(chatID, 10)
+	}
+
+	return title
+}
+
 // countRows computes per-chat match counts sorted by matches desc with
 // zero-match chats last; chat id breaks ties so output stays stable.
 func countRows(collector *walkCollector, targets []scan.Target) []countRow {
@@ -71,7 +85,7 @@ func countRows(collector *walkCollector, targets []scan.Target) []countRow {
 	for _, target := range targets {
 		rows = append(rows, countRow{
 			chatID:  target.Chat.ID,
-			title:   target.Chat.Title,
+			title:   chatLabel(target.Chat.ID, target.Chat.Title),
 			matches: countFor(collector, target.Chat.ID),
 		})
 	}
@@ -88,9 +102,10 @@ func countRows(collector *walkCollector, targets []scan.Target) []countRow {
 }
 
 // countTotalsFor aggregates chats scanned, chats holding at least one
-// match and the total file count.
-func countTotalsFor(rows []countRow) countTotals {
-	totals := countTotals{chats: len(rows)}
+// match, the total file count and the files this run already tracked under
+// another message.
+func countTotalsFor(rows []countRow, duplicates int) countTotals {
+	totals := countTotals{chats: len(rows), duplicates: duplicates}
 
 	for _, row := range rows {
 		totals.files += row.matches
@@ -116,6 +131,7 @@ func countsEnvelope(rows []countRow, totals countTotals) countJSON {
 		TotalChats:       totals.chats,
 		ChatsWithMatches: totals.chatsWithHits,
 		TotalMatches:     totals.files,
+		Duplicates:       totals.duplicates,
 	}
 }
 
@@ -126,6 +142,10 @@ func countsEnvelope(rows []countRow, totals countTotals) countJSON {
 func printCountsTable(cmd *cobra.Command, styler Styler, rows []countRow, totals countTotals) error {
 	totalText := strconv.Itoa(totals.chats) + " chats, " +
 		strconv.Itoa(totals.chatsWithHits) + " with matches"
+
+	if totals.duplicates > 0 {
+		totalText += ", " + strconv.Itoa(totals.duplicates) + " duplicates"
+	}
 
 	widths := countsColumnWidths(rows, totalText)
 
@@ -244,6 +264,7 @@ func printCountsPlain(cmd *cobra.Command, rows []countRow, totals countTotals) e
 		{"total_chats", strconv.Itoa(totals.chats)},
 		{"chats_with_matches", strconv.Itoa(totals.chatsWithHits)},
 		{"total_matches", strconv.Itoa(totals.files)},
+		{"duplicates", strconv.Itoa(totals.duplicates)},
 	}
 
 	if err := printPlainPairs(cmd, pairs); err != nil {
@@ -255,15 +276,21 @@ func printCountsPlain(cmd *cobra.Command, rows []countRow, totals countTotals) e
 
 // printScanSummary renders the final dry-run/scan outcome line to stderr
 // (colored via the stderr styler) so machine-readable stdout stays clean;
-// silent mode suppresses it.
-func printScanSummary(cmd *cobra.Command, app *App, chats, files int, took time.Duration) error {
+// silent mode suppresses it. duplicates counts files this run already
+// tracked under another message and only renders when non-zero.
+func printScanSummary(cmd *cobra.Command, app *App, chats, files, duplicates int, took time.Duration) error {
 	if app.silentMode(cmd) {
 		return nil
 	}
 
 	line := app.errStyle.Dim("scanned:") + " " + app.errStyle.Success(strconv.Itoa(chats)+" chats") + ", " +
-		app.errStyle.Dim("matched:") + " " + app.errStyle.Success(strconv.Itoa(files)+" files") + ", " +
-		app.errStyle.Dim("took") + " " + scanClock(took) + "\n"
+		app.errStyle.Dim("matched:") + " " + app.errStyle.Success(strconv.Itoa(files)+" files")
+
+	if duplicates > 0 {
+		line += ", " + app.errStyle.Dim("duplicates:") + " " + app.errStyle.Success(strconv.Itoa(duplicates))
+	}
+
+	line += ", " + app.errStyle.Dim("took") + " " + scanClock(took) + "\n"
 
 	if _, err := fmt.Fprint(cmd.ErrOrStderr(), line); err != nil {
 		return fmt.Errorf("print scan summary: %w", err)
