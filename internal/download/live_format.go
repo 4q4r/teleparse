@@ -96,6 +96,21 @@ func truncateLive(name string, width int) string {
 	return name[:width-1] + "~"
 }
 
+// truncateLiveTail shortens text to width keeping the TAIL, marking
+// truncation with a leading tilde: Telegram errors end with their machine
+// code, so the tail carries the actionable part of a failure reason.
+func truncateLiveTail(text string, width int) string {
+	if len(text) <= width {
+		return text
+	}
+
+	if width < 2 {
+		return "~"
+	}
+
+	return "~" + text[len(text)-width+1:]
+}
+
 // humanDuration renders whole seconds compactly ("4s", "1m30s").
 func humanDuration(d time.Duration) string {
 	return d.Round(time.Second).Truncate(time.Second).String()
