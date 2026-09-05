@@ -67,11 +67,21 @@ func defaultTemplate() string {
 # and all_proxy - useful when a system-wide HTTPS_PROXY must not apply to
 # teleparse. TELEPARSE_PROXY is always honored regardless.
 
-# takeout = false
 # Route the session through Telegram takeout (data export) endpoints:
 # slower, but with gentler rate limits.
+# takeout = false
+# Auto-enable takeout (export) mode when a scan looks large: lower flood
+# limits for the whole run; the export session finishes when the run ends.
+# Disable with false; --no-takeout overrides per invocation, --takeout forces.
+# takeout_auto = true
+# Estimated scope size (chats) that triggers auto takeout.
+# takeout_auto_min_chats = 50
+` + templateTail()
+}
 
-# [pacing] tunes anti-ban behavior for downloads.
+// templateTail holds the pacing/output/download/hooks sections.
+func templateTail() string {
+	return `# [pacing] tunes anti-ban behavior for downloads.
 
 [pacing]
 # concurrency = 3

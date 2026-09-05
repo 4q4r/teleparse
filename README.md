@@ -127,6 +127,7 @@ server quirks that apply to your combination.
 
 | Command | Purpose |
 |---|---|
+| Takeout | auto-engaged on large scans (`takeout_auto`, threshold `takeout_auto_min_chats = 50`), `--takeout` force / `--no-takeout` disable; export session finishes with the run |
 | `auth login \| logout \| status \| list` | multi-account sessions (0600, flock, stable device identity) |
 | `auth login --qr [--timeout 5m]` | QR-code login: scan with Telegram on another device (auto-refreshing token) |
 | `auth login --import-telethon session.sqlite` | migrate a Telethon session's auth key |

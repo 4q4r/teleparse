@@ -13,17 +13,18 @@ import (
 
 // Sentinel errors wrapped by dynamic validation messages.
 var (
-	ErrBadCollision      = errors.New("not one of index|overwrite|skip")
-	ErrBadConcurrency    = errors.New("must be >= 1")
-	ErrBadDelay          = errors.New("need 0 <= min <= max")
-	ErrBadRetryMax       = errors.New("must be >= 1")
-	ErrBadProxyURL       = errors.New("missing scheme")
-	ErrBadEnvProxyScheme = errors.New("unsupported proxy scheme")
-	ErrProfileAbsent     = errors.New("profile not found")
-	ErrBadTildeRoot      = errors.New("cannot resolve ~")
-	ErrNoHomeDir         = errors.New("cannot resolve home directory")
-	ErrBadThreads        = errors.New("must be within 1..16")
-	ErrBadConnections    = errors.New("must be within 1..8")
+	ErrBadCollision       = errors.New("not one of index|overwrite|skip")
+	ErrBadConcurrency     = errors.New("must be >= 1")
+	ErrBadDelay           = errors.New("need 0 <= min <= max")
+	ErrBadRetryMax        = errors.New("must be >= 1")
+	ErrBadTakeoutMinChats = errors.New("must be >= 1 when takeout_auto is on")
+	ErrBadProxyURL        = errors.New("missing scheme")
+	ErrBadEnvProxyScheme  = errors.New("unsupported proxy scheme")
+	ErrProfileAbsent      = errors.New("profile not found")
+	ErrBadTildeRoot       = errors.New("cannot resolve ~")
+	ErrNoHomeDir          = errors.New("cannot resolve home directory")
+	ErrBadThreads         = errors.New("must be within 1..16")
+	ErrBadConnections     = errors.New("must be within 1..8")
 )
 
 // Defaults for pacing (see research: conservative anti-ban numbers) and
@@ -36,6 +37,8 @@ const (
 	defaultDelayMaxSeconds   = 4.0
 	defaultFloodThresholdSec = 60
 	defaultRetryMax          = 4
+	// defaultTakeoutAutoMinChats is the auto-takeout scope-size threshold.
+	defaultTakeoutAutoMinChats = 50
 	// DefaultThreads is the built-in per-file ranged-thread count.
 	DefaultThreads = 4
 	// DefaultConnections is the built-in per-DC pooled connection count.
@@ -80,6 +83,13 @@ type Net struct {
 	// TELEPARSE_PROXY is always honored as an explicit app override.
 	IgnoreEnv bool `toml:"ignore_env"`
 	Takeout   bool `toml:"takeout"`
+	// TakeoutAuto engages Telegram's export (takeout) mode automatically
+	// when a scan looks large, trading interactivity for lower flood
+	// limits; the takeout session is finished right after the run.
+	TakeoutAuto bool `toml:"takeout_auto"`
+	// TakeoutAutoMinChats is the estimated scope size at which auto
+	// takeout engages.
+	TakeoutAutoMinChats int `toml:"takeout_auto_min_chats"`
 	// ProxySource reports where the effective proxy came from:
 	// "flag", "env:NAME", "config" or "" (direct). Never read from TOML.
 	ProxySource string `toml:"-"`
@@ -199,7 +209,10 @@ func Load(path string) (*Config, *Paths, error) {
 func Default() *Config {
 	return &Config{
 		Auth: Auth{Account: "default"},
-		Net:  Net{},
+		Net: Net{
+			TakeoutAuto:         true,
+			TakeoutAutoMinChats: defaultTakeoutAutoMinChats,
+		},
 		Pacing: Pacing{
 			Concurrency:         defaultConcurrency,
 			DelayMin:            defaultDelayMinSeconds,
@@ -246,6 +259,10 @@ func (c *Config) Validate() error {
 
 	if err := c.validateDownload(); err != nil {
 		return err
+	}
+
+	if c.Net.TakeoutAuto && c.Net.TakeoutAutoMinChats < 1 {
+		return fmt.Errorf("net.takeout_auto_min_chats %d: %w", c.Net.TakeoutAutoMinChats, ErrBadTakeoutMinChats)
 	}
 
 	if c.Net.Proxy != "" && !strings.Contains(c.Net.Proxy, "://") {
