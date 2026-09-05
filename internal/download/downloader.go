@@ -76,6 +76,7 @@ type Result struct {
 	Failed       int64
 	Retries      int64
 	Bytes        int64
+	Duplicates   int64
 	Parked       bool
 	ResumeAt     time.Time
 	FailedByChat map[int64]int64
@@ -94,7 +95,8 @@ type Manager struct {
 	Fetch    FetchFunc
 	now      func() time.Time
 
-	chats map[int64]struct{}
+	chats      map[int64]struct{}
+	duplicates int64
 }
 
 // NewManager returns a Manager over the given state store, pacer, config,
@@ -164,6 +166,10 @@ func asItemReporter(reporter Reporter) ItemReporter {
 // is already done are skipped entirely; "hash" additionally treats a
 // post-download sha256 equal to an existing done row as a duplicate (the
 // pre-check itself is identical to unique-id). "off" re-downloads.
+// A file already tracked under a different message — including the same
+// file forwarded into another chat — is a benign skip counted into
+// Result.Duplicates; Enqueue never aborts on it, and the chat of the
+// duplicate sighting is never registered, so it stays download-free.
 func (m *Manager) Enqueue(ctx context.Context, items []store.MediaItem) error {
 	for idx := range items {
 		item := items[idx]
@@ -177,12 +183,21 @@ func (m *Manager) Enqueue(ctx context.Context, items []store.MediaItem) error {
 			}
 
 			if exists && known.Status == store.StatusDone {
+				m.duplicates++
+
 				continue
 			}
 		}
 
-		if err := m.store.UpsertMedia(ctx, &item); err != nil {
+		stored, err := m.store.UpsertMedia(ctx, &item)
+		if err != nil {
 			return fmt.Errorf("enqueue %d/%d/%d: %w", item.ChatID, item.MessageID, item.MediaIndex, err)
+		}
+
+		if !stored {
+			m.duplicates++
+
+			continue
 		}
 
 		m.chats[item.ChatID] = struct{}{}
@@ -224,7 +239,12 @@ func (m *Manager) Run(ctx context.Context, runID string) (Result, error) {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	state := &runState{res: Result{FailedByChat: map[int64]int64{}}, cancel: cancel}
+	state := &runState{res: Result{
+		FailedByChat: map[int64]int64{},
+		// Enqueue ran before Run; carry its duplicate count into the
+		// reported outcome.
+		Duplicates: m.duplicates,
+	}, cancel: cancel}
 	items := make(chan store.MediaItem)
 
 	var workers sync.WaitGroup

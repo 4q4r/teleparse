@@ -404,6 +404,7 @@ func TestLifecycleDedupeUniqueIDAcrossChats(t *testing.T) {
 	require.NoError(t, err)
 	assert.EqualValues(t, 0, res2.Downloaded)
 	assert.EqualValues(t, 0, res2.Skipped)
+	assert.EqualValues(t, 1, res2.Duplicates, "the done-file skip counts as a duplicate")
 	assert.EqualValues(t, 1, fetches.Load(), "the duplicate must never reach Fetch")
 
 	row, exists, err := st.MediaByFile(ctx, "document", 1)
@@ -415,6 +416,48 @@ func TestLifecycleDedupeUniqueIDAcrossChats(t *testing.T) {
 	entries, err := os.ReadDir(root)
 	require.NoError(t, err)
 	assert.Len(t, entries, 1, "exactly one file may land on disk")
+}
+
+// TestManagerEnqueueDuplicateAcrossChats reproduces the forwarded-file
+// crash: the same unique media id enqueued for two different chats in one
+// batch must never abort Enqueue, must count one duplicate, and must leave
+// a folder only for the chat that owns the first sighting.
+func TestManagerEnqueueDuplicateAcrossChats(t *testing.T) {
+	t.Parallel()
+
+	st := newTestStore(t)
+	root := t.TempDir()
+
+	resolver := templateResolver{
+		root:     root,
+		template: "{chat}/{msgid}_{filename}",
+		titles:   map[int64]string{1: "News", 2: "Docs"},
+		files: map[int64]*filters.FileInfo{
+			5: {Present: true, Kind: "document", Name: "a.jpg", Ext: ".jpg", Size: 5},
+		},
+	}
+
+	mgr := download.NewManager(st, newPacer(time.Minute), managerConfig(), resolver, download.NoopReporter{})
+	mgr.Fetch = byteSource("hello")
+
+	ctx := context.Background()
+	require.NoError(t, st.CreateRun(ctx, &store.Run{RunID: "run-dup", Account: "main", FilterJSON: "{}"}))
+
+	original := sizedQueuedItem(1, 5, "hello")
+	duplicate := sizedQueuedItem(2, 6, "hello")
+	duplicate.MediaID = original.MediaID
+
+	enqueue(t, mgr, original, duplicate)
+
+	res, err := mgr.Run(ctx, "run-dup")
+	require.NoError(t, err, "duplicate files must never abort the run")
+	assert.EqualValues(t, 1, res.Downloaded)
+	assert.EqualValues(t, 1, res.Duplicates, "the forwarded copy counts once")
+
+	entries, err := os.ReadDir(root)
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "only the first-sighting chat may create a folder")
+	assert.Equal(t, "News", entries[0].Name())
 }
 
 func TestLifecycleHookPathSubstitution(t *testing.T) {

@@ -339,7 +339,7 @@ func executeRun(ctx context.Context, cmd *cobra.Command, app *App, account, prof
 
 		before, began := len(collector.items), time.Now()
 
-		progress.chatStart(target.Chat.Title)
+		progress.chatStart(chatLabel(target.Chat.ID, target.Chat.Title))
 
 		if err := walkTarget(ctx, state, api, target, plan, opts, mode, collector); err != nil {
 			progress.close()
@@ -347,7 +347,7 @@ func executeRun(ctx context.Context, cmd *cobra.Command, app *App, account, prof
 			return finishRunE(ctx, state, runID, err)
 		}
 
-		progress.chatDone(target.Chat.Title, len(collector.items)-before, time.Since(began))
+		progress.chatDone(chatLabel(target.Chat.ID, target.Chat.Title), len(collector.items)-before, time.Since(began))
 	}
 
 	progress.close()
@@ -391,7 +391,7 @@ func walkTarget(ctx context.Context, state *store.Store, api *tgapi.Client, targ
 	walker := scan.NewHistoryWalker(api, scan.HistoryFeeds(api), scan.NewSenderCache(api))
 
 	if err := walker.Walk(ctx, target, plan, walkOpts, emit); err != nil {
-		return fmt.Errorf("walk %q: %w", target.Chat.Title, err)
+		return fmt.Errorf("walk %q: %w", chatLabel(target.Chat.ID, target.Chat.Title), err)
 	}
 
 	return nil
@@ -431,24 +431,31 @@ func newRunResolver(app *App, api refetchAPI) (*runResolver, *walkCollector) {
 func previewRun(ctx context.Context, cmd *cobra.Command, app *App, state *store.Store, runID string,
 	collector *walkCollector, targets []scan.Target, mode runMode, walkTime time.Duration,
 ) error {
+	duplicates := 0
+
 	for idx := range collector.items {
 		item := collector.items[idx]
 		item.Status = store.StatusDiscovered
 
-		if err := state.UpsertMedia(ctx, &item); err != nil {
+		stored, err := state.UpsertMedia(ctx, &item)
+		if err != nil {
 			return finishRunE(ctx, state, runID, err)
+		}
+
+		if !stored {
+			duplicates++
 		}
 	}
 
 	if mode.countOnly {
-		if err := printCounts(cmd, app, collector, targets); err != nil {
+		if err := printCounts(cmd, app, collector, targets, duplicates); err != nil {
 			return err
 		}
 	} else if err := printPlan(cmd, collector); err != nil {
 		return err
 	}
 
-	if err := printScanSummary(cmd, app, len(targets), len(collector.items), walkTime); err != nil {
+	if err := printScanSummary(cmd, app, len(targets), len(collector.items), duplicates, walkTime); err != nil {
 		return err
 	}
 

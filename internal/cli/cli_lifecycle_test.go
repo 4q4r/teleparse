@@ -133,14 +133,16 @@ func seedState(t *testing.T) string {
 			Size: ptr(int64(1536)), Filename: ptr("file.bin"),
 			Status: store.StatusDone, Path: ptr("out/file.bin"),
 		}
-		require.NoError(t, st.UpsertMedia(ctx, item))
+		_, err := st.UpsertMedia(ctx, item)
+		require.NoError(t, err)
 	}
 
 	pending := &store.MediaItem{
 		ChatID: 43, MessageID: 1, MediaIndex: 0,
 		MediaClass: "photo", MediaID: 2001, Status: store.StatusQueued,
 	}
-	require.NoError(t, st.UpsertMedia(ctx, pending))
+	_, err = st.UpsertMedia(ctx, pending)
+	require.NoError(t, err)
 
 	require.NoError(t, st.CreateRun(ctx, &store.Run{
 		RunID: "run-seed-done", Account: "main", FilterJSON: "media = [\"photo\"]",
