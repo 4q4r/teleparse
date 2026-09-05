@@ -101,6 +101,8 @@ func TestAuthListPlainFormatsAccounts(t *testing.T) {
 func TestChatsListJSONFailsFastWithoutCreds(t *testing.T) {
 	t.Setenv("TELEPARSE_API_ID", "")
 	t.Setenv("TELEPARSE_API_HASH", "")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	_, err := execute(t, "--config", tempConfigPath(t), "--format", "json", "chats", "list")
 	require.Error(t, err)
