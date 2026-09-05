@@ -25,6 +25,7 @@ var (
 const (
 	hoursPerDay    = 24
 	daysPerWeek    = 7
+	daysPerYear    = 365
 	secondsPerHour = 3600
 )
 
@@ -190,6 +191,8 @@ func relativeUnitDuration(num int, unit string) (time.Duration, error) {
 		return time.Duration(num) * hoursPerDay * time.Hour, nil
 	case "w":
 		return time.Duration(num) * daysPerWeek * hoursPerDay * time.Hour, nil
+	case "y":
+		return time.Duration(num) * daysPerYear * hoursPerDay * time.Hour, nil
 	default:
 		d, err := time.ParseDuration(strconv.Itoa(num) + unit)
 		if err != nil {

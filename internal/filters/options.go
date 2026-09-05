@@ -94,8 +94,12 @@ type Options struct {
 	ChatRegex       string   `toml:"chat_regex"       flag:"chat-regex"       usage:"regex over chat titles"`
 	Archived        string   `toml:"archived"         flag:"archived"         usage:"archived chats: only|exclude|any"`
 	SavedOnly       bool     `toml:"saved_only"       flag:"saved"            usage:"scan Saved Messages only"`
-	ChatUsername    string   `toml:"chat_username"    flag:"chat-username"    usage:"exact chat @username"`
-	ChatDeleted     TriBool  `toml:"chat_deleted"     flag:"chat-deleted"     usage:"chats whose peer is a deleted account (true|false)"`
+	// ChatMinAge keeps only chats that contain at least one message older
+	// than the given relative age ("1y", "18m"); private chats expose no
+	// creation date, so this is the honest proxy (one probe RPC per chat).
+	ChatMinAge   string  `toml:"chat_min_age"      flag:"chat-min-age"     usage:"only chats with messages older than this (e.g. 1y, 90d)"`
+	ChatUsername string  `toml:"chat_username"    flag:"chat-username"    usage:"exact chat @username"`
+	ChatDeleted  TriBool `toml:"chat_deleted"     flag:"chat-deleted"     usage:"chats whose peer is a deleted account (true|false)"`
 
 	// --- sender ---
 	ContactsOnly        bool     `toml:"contacts_only"        flag:"sender-contacts"       usage:"only messages from users in my contacts"`
@@ -271,6 +275,7 @@ func (o *Options) validateParsed() error {
 		{"min-duration", o.MinDuration, "duration"},
 		{"max-duration", o.MaxDuration, "duration"},
 		{"after", o.After, "time"},
+		{"chat-min-age", o.ChatMinAge, "time"},
 		{"before", o.Before, "time"},
 		{"last", o.Last, "time"},
 		{"older-than", o.OlderThan, "time"},
