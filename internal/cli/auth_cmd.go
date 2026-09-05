@@ -17,6 +17,9 @@ import (
 	"golang.org/x/term"
 )
 
+// errUnreachable marks a failed pre-login connectivity probe.
+var errUnreachable = errors.New("cannot reach Telegram — check network or proxy settings (net.proxy, TELEPARSE_PROXY)")
+
 // errNotAuthorized marks a missing session without aborting other output.
 var errNotAuthorized = errors.New("account is not logged in")
 
@@ -46,7 +49,7 @@ func newStdPrompter() stdPrompter {
 }
 
 func (p stdPrompter) Line(prompt string) (string, error) {
-	if err := printPlain(p.out, prompt+":"); err != nil {
+	if err := printPrompt(p.out, prompt+": "); err != nil {
 		return "", err
 	}
 
@@ -61,7 +64,7 @@ func (p stdPrompter) Line(prompt string) (string, error) {
 }
 
 func (p stdPrompter) Hidden(prompt string) (string, error) {
-	if err := printPlain(p.out, prompt+":"); err != nil {
+	if err := printPrompt(p.out, prompt+": "); err != nil {
 		return "", err
 	}
 
@@ -79,6 +82,16 @@ func (p stdPrompter) Hidden(prompt string) (string, error) {
 	}
 
 	return p.Line("")
+}
+
+// printPrompt writes prompt text WITHOUT a trailing newline so the answer
+// is typed on the same line (os.File writes are unbuffered in Go).
+func printPrompt(file *os.File, text string) error {
+	if _, err := fmt.Fprint(file, text); err != nil {
+		return fmt.Errorf("write prompt: %w", err)
+	}
+
+	return nil
 }
 
 // printPlain writes one line to an os.File with a checked error.
@@ -127,6 +140,10 @@ func authLoginCmd(app *App) *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			account := app.cfg.Auth.Account
 
+			if err := runConnectivityCheck(cmd, app); err != nil {
+				return fail(cmd, err)
+			}
+
 			if cmd.Flags().Changed("timeout") && !useQR {
 				return fail(cmd, fmt.Errorf("%s: %w", qrTimeout, errQRTimeoutNeedsQR))
 			}
@@ -139,16 +156,16 @@ func authLoginCmd(app *App) *cobra.Command {
 				return fail(cmd, errQRExclusive)
 			}
 
-			creds, err := resolveCredsInteractive(
-				term.IsTerminal(int(os.Stdin.Fd())),
-				notifyingPrompter{newStdPrompter()},
-			)
+			plan, err := resolveLoginMethod(loginMenuText(app.style), useQR, phone, importPath, tdataDir,
+				term.IsTerminal(int(os.Stdin.Fd())), newStdPrompter().Line)
 			if err != nil {
 				return fail(cmd, err)
 			}
 
-			plan, err := resolveLoginMethod(loginMenuText(app.style), useQR, phone, importPath, tdataDir,
-				term.IsTerminal(int(os.Stdin.Fd())), newStdPrompter().Line)
+			creds, err := resolveCredsInteractive(
+				term.IsTerminal(int(os.Stdin.Fd())),
+				notifyingPrompter{newStdPrompter()},
+			)
 			if err != nil {
 				return fail(cmd, err)
 			}
@@ -407,4 +424,27 @@ func authExportCmd(app *App) *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// connectivityProbeTimeout bounds the pre-login connection check.
+const connectivityProbeTimeout = 6 * time.Second
+
+// runConnectivityCheck always runs before any login interaction: it proves
+// the network path to Telegram (through the effective proxy) so problems
+// surface before the user types anything.
+func runConnectivityCheck(cmd *cobra.Command, app *App) error {
+	probeCtx, cancel := context.WithTimeout(cmd.Context(), connectivityProbeTimeout)
+	defer cancel()
+
+	latency, err := tg.ProbeProxy(probeCtx, app.cfg.Net.Proxy)
+	if err != nil {
+		return fmt.Errorf("connection check failed: %w: %w", err, errUnreachable)
+	}
+
+	via := app.cfg.Net.ProxySource
+	if via == "" {
+		via = "direct"
+	}
+
+	return printLine(cmd, "connection: OK (dc%d, %dms, %s)\n", 2, latency.Milliseconds(), via)
 }
