@@ -315,3 +315,25 @@ func (m *memWriterAt) WriteAt(chunk []byte, off int64) (int, error) {
 
 	return len(chunk), nil
 }
+
+// TestParallelFetchNilPoolsRidesFallback pins the takeout path: with no
+// pools at all (takeout forbids raw media connections), downloads must
+// ride the fallback client (the takeout-wrapped API).
+func TestParallelFetchNilPoolsRidesFallback(t *testing.T) {
+	t.Parallel()
+
+	fallback := fakeInvoker{dc: 9}
+
+	runner := &recordingRunner{script: []func(call runnerCall) error{
+		func(runnerCall) error { return nil },
+	}}
+
+	fetch := ParallelFetch(nil, fallback, ParallelOptions{Threads: 4, run: runner.run})
+
+	_, err := fetch(t.Context(), parallelInput(2), &memWriterAt{})
+	require.NoError(t, err)
+
+	require.Len(t, runner.calls, 1)
+	assert.Equal(t, 9, runner.calls[0].rpc.dc, "nil pools must use the fallback client")
+	assert.Equal(t, 4, runner.calls[0].threads)
+}

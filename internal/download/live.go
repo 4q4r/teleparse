@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -57,6 +58,7 @@ type liveState struct {
 	throttleNote  string
 	throttleUntil time.Time
 	total         []speedSample
+	failReasons   []string
 }
 
 func newLiveState(now func() time.Time) *liveState {
@@ -94,6 +96,40 @@ func (s *liveState) itemProgress(key string, delta int64) {
 
 	// totalBytes already includes this item's new position.
 	s.total = append(s.total, speedSample{at: at, bytes: s.totalBytes()})
+}
+
+// failReasonsMax bounds how many distinct failure reasons the live view
+// and the final summary surface.
+const failReasonsMax = 3
+
+// liveFailMsg settles a transfer as failed and records its reason.
+type liveFailMsg struct {
+	key    string
+	reason string
+}
+
+// itemFailed retires the transfer and remembers the failure reason for
+// the visible block and the final summary.
+func (s *liveState) itemFailed(key, reason string) {
+	s.itemDone(key)
+	s.failReasons = appendBoundedStrings(s.failReasons, reason, failReasonsMax)
+}
+
+// appendBoundedStrings appends distinct reasons, keeping the newest ones.
+func appendBoundedStrings(list []string, item string, limit int) []string {
+	for idx, existing := range list {
+		if existing == item {
+			list = append(list[:idx], list[idx+1:]...)
+
+			break
+		}
+	}
+
+	if len(list) >= limit {
+		list = list[len(list)-limit+1:]
+	}
+
+	return append(list, item)
 }
 
 func (s *liveState) itemDone(key string) {
@@ -209,6 +245,10 @@ func (s *liveState) lines(width int) []string {
 
 	out = append(out, s.totalsLine(now))
 
+	for _, reason := range s.failReasons {
+		out = append(out, truncateLive("FAIL "+reason, width))
+	}
+
 	if s.throttleNote != "" && now.Before(s.throttleUntil) {
 		out = append(out, s.throttleNote)
 	}
@@ -265,10 +305,37 @@ func (s *liveState) totalSamples(now time.Time) []speedSample {
 	return append(s.total, speedSample{at: now, bytes: s.totalBytes()})
 }
 
+// liveReasonWidth bounds failure-reason lines in the live view.
+const liveReasonWidth = 100
+
+// errString renders an error for the live view (nil-safe).
+func errString(err error) string {
+	if err == nil {
+		return "unknown error"
+	}
+
+	return err.Error()
+}
+
 func (s *liveState) summaryLine() string {
-	return fmt.Sprintf("%d done (%s), %d skipped, %d failed, %d retries in %s",
+	line := fmt.Sprintf("%d done (%s), %d skipped, %d failed, %d retries in %s",
 		s.done, humanBytes(s.bytes), s.skipped, s.failed, s.retries,
 		humanDuration(s.now().Sub(s.started).Round(time.Second)))
+
+	parts := append([]string{line}, prefixedFailures(s.failReasons)...)
+
+	return strings.Join(parts, "")
+}
+
+// prefixedFailures renders newline-prefixed failure reasons for the summary.
+func prefixedFailures(reasons []string) []string {
+	prefixed := make([]string, 0, len(reasons))
+
+	for _, reason := range reasons {
+		prefixed = append(prefixed, "\nFAIL "+reason)
+	}
+
+	return prefixed
 }
 
 // Live reporter messages: every Reporter and ItemReporter call becomes one
@@ -320,6 +387,8 @@ func (m liveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn /
 		m.state.itemStart(typed.key, typed.name, typed.total, typed.offset)
 	case liveProgressMsg:
 		m.state.itemProgress(typed.key, typed.delta)
+	case liveFailMsg:
+		m.state.itemFailed(typed.key, typed.reason)
 	case liveDoneMsg:
 		m.state.itemDone(typed.key)
 	case liveThrottleMsg:
@@ -408,8 +477,8 @@ func (r *LiveReporter) ItemDone(key string, failed bool) {
 // ItemFailedDetail implements FailureDetailReporter: the live view settles
 // failure counts through the counters, so the detail reduces to retiring
 // the transfer line.
-func (r *LiveReporter) ItemFailedDetail(key string, _ int, _ error) {
-	r.program.Send(liveDoneMsg{key: key})
+func (r *LiveReporter) ItemFailedDetail(key string, _ int, err error) {
+	r.program.Send(liveFailMsg{key: key, reason: truncateLive(errString(err), liveReasonWidth)})
 }
 
 // Throttled implements ItemReporter by surfacing a server flood wait.

@@ -246,7 +246,7 @@ func runAccountSession(
 				ctx context.Context,
 				api *tgapi.Client,
 			) error {
-				return executeRun(ctx, cmd, app, account, profileName, opts, plan, specs, mode, api, client)
+				return executeRun(ctx, cmd, app, account, profileName, opts, plan, specs, mode, api, client, takeoutMode)
 			}, func(finishErr error) {
 				if app.silentMode(cmd) {
 					return
@@ -339,7 +339,7 @@ func withAPI(
 // downloads everything the filters matched; decomposed into helpers below.
 func executeRun(ctx context.Context, cmd *cobra.Command, app *App, account, profileName string,
 	opts filters.Options, plan *filters.Plan, specs []string, mode runMode,
-	api *tgapi.Client, client *telegram.Client,
+	api *tgapi.Client, client *telegram.Client, takeoutActive bool,
 ) error {
 	state, err := openStore(app) //nolint:contextcheck // store.Open takes no context
 	if err != nil {
@@ -421,7 +421,8 @@ func executeRun(ctx context.Context, cmd *cobra.Command, app *App, account, prof
 		return previewRun(ctx, cmd, app, state, runID, collector, targets, mode, time.Since(walkStarted))
 	}
 
-	return downloadRun(ctx, cmd, state, app, runID, account, resolver, collector, targets, opts, api, client)
+	return downloadRun(ctx, cmd, state, app, runID, account, resolver,
+		collector, targets, opts, api, client, takeoutActive)
 }
 
 // walkCollector accumulates manifest items, walk context and per-chat
@@ -629,7 +630,7 @@ func previewRun(ctx context.Context, cmd *cobra.Command, app *App, state *store.
 
 func downloadRun(ctx context.Context, cmd *cobra.Command, state *store.Store, app *App, runID string,
 	account string, resolver *runResolver, collector *walkCollector, targets []scan.Target,
-	opts filters.Options, api *tgapi.Client, client *telegram.Client,
+	opts filters.Options, api *tgapi.Client, client *telegram.Client, takeoutActive bool,
 ) error {
 	pacer := pace.New(pace.Config{
 		Concurrency:         app.cfg.Pacing.Concurrency,
@@ -660,9 +661,24 @@ func downloadRun(ctx context.Context, cmd *cobra.Command, state *store.Store, ap
 
 	// Parallel-connection engine: per-DC media pools with a home-DC
 	// fallback; pool failures degrade to the single primary connection.
-	pools := tg.NewDownloadPools(client, int64(connections))
+	// Under an ACTIVE takeout session upload.getFile outside the session
+	// fails instantly with 403 TAKEOUT_REQUIRED, so downloads must ride
+	// the takeout invoker (single connection; ranged threads multiplex).
+	var pools download.InvokerSource
 
-	defer func() { _ = pools.Close() }()
+	if takeoutActive {
+		if !app.silentMode(cmd) {
+			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s\n", app.errStyle.Dim(
+				"downloads ride the takeout session (single connection; parallel pools resume on non-takeout runs)")); err != nil {
+				return fmt.Errorf("print takeout download notice: %w", err)
+			}
+		}
+	} else {
+		poolSet := tg.NewDownloadPools(client, int64(connections))
+		defer func() { _ = poolSet.Close() }()
+
+		pools = poolSet //nolint:gosimple // concrete type satisfies the seam
+	}
 
 	mgr := download.NewManager(state, pacer, download.Config{
 		Output:       app.cfg.Output,
