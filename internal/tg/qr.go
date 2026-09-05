@@ -67,6 +67,7 @@ type qrLoginer interface {
 func QRLogin(
 	ctx context.Context,
 	account string,
+	creds Creds,
 	opts QROptions,
 	cfg *config.Config,
 	paths *config.Paths,
@@ -84,7 +85,7 @@ func QRLogin(
 
 	info := &SelfInfo{}
 
-	runErr := RunWithUpdates(ctx, account, cfg, paths, dispatcher, func(
+	runErr := RunWithUpdates(ctx, account, creds, cfg, paths, dispatcher, func(
 		ctx context.Context,
 		client *telegram.Client,
 	) error {

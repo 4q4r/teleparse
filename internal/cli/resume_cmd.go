@@ -159,7 +159,12 @@ func resumeOne(app *App, cmd *cobra.Command, run store.Run) error {
 	cfg := *app.cfg
 	cfg.Auth.Account = run.Account
 
-	runErr := tg.Run(cmd.Context(), run.Account, &cfg, app.paths, func(
+	creds, err := app.resolveCreds()
+	if err != nil {
+		return err
+	}
+
+	runErr := tg.Run(cmd.Context(), run.Account, creds, &cfg, app.paths, func(
 		ctx context.Context,
 		client *telegram.Client,
 	) error {

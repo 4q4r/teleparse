@@ -12,13 +12,21 @@ var errBadLoginChoice = errors.New("unknown login method choice")
 // errLoginPathRequired rejects empty import paths picked interactively.
 var errLoginPathRequired = errors.New("path is required")
 
-// loginMenu lists the interactive login methods; choice 1 is the default.
-const loginMenu = `Select login method:
+// loginMenuBody lists the interactive login methods; choice 1 is the default.
+const loginMenuBody = `Select login method:
   1) Phone number + code (default)
   2) QR code (scan from another device)
   3) Import a Telethon session file
-  4) Import Telegram Desktop tdata
-Choice [1]`
+  4) Import Telegram Desktop tdata`
+
+// loginMenuHint is the trailing choice prompt of the login menu.
+const loginMenuHint = "Choice [1]"
+
+// loginMenuText renders the full login menu: the numbered methods stay
+// plain, the choice hint is de-emphasized.
+func loginMenuText(styler Styler) string {
+	return loginMenuBody + "\n" + styler.Dim(loginMenuHint)
+}
 
 // loginPlan is the resolved single-run login configuration.
 type loginPlan struct {
@@ -30,9 +38,9 @@ type loginPlan struct {
 
 // resolveLoginMethod decides how this login runs: explicit flags win and
 // skip the menu entirely; with no flags and an interactive terminal the
-// user picks a method (default phone); non-interactive sessions fall back
-// to the phone flow so scripted logins keep working.
-func resolveLoginMethod(qr bool, phone, telethon, tdata string, interactive bool,
+// user picks a method from menu (default phone); non-interactive sessions
+// fall back to the phone flow so scripted logins keep working.
+func resolveLoginMethod(menu string, qr bool, phone, telethon, tdata string, interactive bool,
 	ask func(string) (string, error),
 ) (loginPlan, error) {
 	plan := loginPlan{Phone: phone, QR: qr, TelethonPath: telethon, TDataDir: tdata}
@@ -42,7 +50,7 @@ func resolveLoginMethod(qr bool, phone, telethon, tdata string, interactive bool
 		return plan, nil
 	}
 
-	answer, err := ask(loginMenu)
+	answer, err := ask(menu)
 	if err != nil {
 		return loginPlan{}, fmt.Errorf("read login method: %w", err)
 	}

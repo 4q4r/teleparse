@@ -158,7 +158,8 @@ func proxyCmd(app *App) *cobra.Command {
 						proxy = "(direct)"
 					}
 
-					return printLine(cmd, "proxy: %s\nsource: %s\n", proxy, proxySourceLabel(app.cfg.Net.ProxySource))
+					return printLine(cmd, "proxy: %s\nsource: %s\n",
+						proxy, app.style.Dim(proxySourceLabel(app.cfg.Net.ProxySource)))
 				}
 			},
 		},

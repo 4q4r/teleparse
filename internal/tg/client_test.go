@@ -1,35 +1,33 @@
 package tg_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/4q4r/teleparse/internal/config"
 	"github.com/4q4r/teleparse/internal/tg"
 
+	"github.com/gotd/td/telegram"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestCredsFromEnv(t *testing.T) {
-	t.Setenv("TELEPARSE_API_ID", "")
-	t.Setenv("TELEPARSE_API_HASH", "")
+// TestRunRejectsUnsetCreds covers the entry guard: a zero credential pair
+// fails before any account storage, lock or dial is touched; the cli layer
+// owns resolution and surfaces the actionable help error.
+func TestRunRejectsUnsetCreds(t *testing.T) {
+	t.Parallel()
 
-	_, _, err := tg.CredsFromEnv()
-	require.ErrorIs(t, err, tg.ErrAPICredsMissing)
+	run := func(context.Context, *telegram.Client) error { return nil }
 
-	t.Setenv("TELEPARSE_API_ID", "123456")
-	t.Setenv("TELEPARSE_API_HASH", "deadbeefcafe")
+	err := tg.Run(t.Context(), "main", tg.Creds{}, &config.Config{}, &config.Paths{}, run)
+	require.ErrorIs(t, err, tg.ErrCredsUnset)
 
-	apiID, apiHash, err := tg.CredsFromEnv()
-	require.NoError(t, err)
-	assert.Equal(t, int64(123456), apiID)
-	assert.Equal(t, "deadbeefcafe", apiHash)
+	err = tg.Run(t.Context(), "main", tg.Creds{APIID: 1}, &config.Config{}, &config.Paths{}, run)
+	require.ErrorIs(t, err, tg.ErrCredsUnset)
 
-	t.Setenv("TELEPARSE_API_ID", "not-a-number")
-	t.Setenv("TELEPARSE_API_HASH", "hash")
-
-	_, _, err = tg.CredsFromEnv()
-	require.Error(t, err)
+	err = tg.Run(t.Context(), "main", tg.Creds{APIHash: "h"}, &config.Config{}, &config.Paths{}, run)
+	require.ErrorIs(t, err, tg.ErrCredsUnset)
 }
 
 func TestBuildMiddlewares(t *testing.T) {

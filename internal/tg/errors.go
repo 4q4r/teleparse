@@ -7,10 +7,9 @@ import "errors"
 
 // Sentinel errors wrapped by dynamic context messages.
 var (
-	ErrAccountName     = errors.New("account name must be 1-64 chars of [a-z0-9_-]")
-	ErrAccountInUse    = errors.New("account in use")
-	ErrAPICredsMissing = errors.New("TELEPARSE_API_ID and TELEPARSE_API_HASH must be set " +
-		"(create credentials at https://my.telegram.org)")
+	ErrAccountName       = errors.New("account name must be 1-64 chars of [a-z0-9_-]")
+	ErrAccountInUse      = errors.New("account in use")
+	ErrCredsUnset        = errors.New("api credentials are not set (cli must resolve them via config)")
 	ErrBadProxyURL       = errors.New("cannot parse proxy URL")
 	ErrBadProxyScheme    = errors.New("unsupported proxy scheme (want socks5:// socks4:// http:// mtproto:// webproxy://)")
 	ErrBadProxySecret    = errors.New("invalid mtproto secret")

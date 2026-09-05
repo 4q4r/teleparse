@@ -95,9 +95,11 @@ Releases are cut by [GoReleaser](https://goreleaser.com) on every `v*` tag
 ## Quickstart
 
 ```bash
-# credentials from https://my.telegram.org (never committed, env only)
+# credentials from https://my.telegram.org: export them once
 export TELEPARSE_API_ID=123456
-export TELEPARSE_API_HASH=abcdef1234567890
+export TELEPARSE_API_HASH=abcdef1234567890abcdef1234567890
+# (or skip the exports: `teleparse auth login` asks for them and can save
+#  them to ~/.config/teleparse/credentials.toml, 0600)
 
 teleparse auth login                     # phone → code → 2FA (session in ~/.config/teleparse)
 teleparse auth login --qr                # QR login: approve from Telegram on another device
@@ -149,9 +151,29 @@ Global flags:
 | Flag | Purpose |
 |---|---|
 | `--format table\|json\|plain` | output format for `chats list`, `runs list\|show`, `stats`, `proxy show\|test`, `ping`, `auth list` (stable JSON field names; `plain` = greppable `key: value` lines) |
-| `--no-ascii` | plain ASCII output: line-per-item progress instead of the live redraw UI, ASCII-only tables and bars |
+| `--no-ascii` | plain ASCII output: line-per-item progress instead of the live redraw UI, ASCII-only tables and bars (also disables colors) |
+| `--no-color` | disable colored output; identical to `NO_COLOR=1`. Colors are on only when stdout is a terminal and none of `--no-color` / `--no-ascii` / `NO_COLOR` applies — the systemd/docker/plain-pipe cases always get plain output |
 
 ## Authentication
+
+Telegram API credentials (`api_id` / `api_hash`) are resolved once per run,
+highest first:
+
+1. `TELEPARSE_API_ID` + `TELEPARSE_API_HASH` environment variables
+2. `~/.config/teleparse/credentials.toml` (0600, dir 0700):
+
+```toml
+[app]
+api_id = 123456
+api_hash = "0123456789abcdef0123456789abcdef"
+```
+
+`teleparse auth login` on a terminal asks for missing credentials
+(numeric id, hidden 32-hex hash, up to three attempts each) and offers to
+write that file for future runs. Without a terminal the failure prints the
+exact exports to set plus the `auth login` alternative, so scripted and
+container runs stay actionable. `doctor` reports the resolved source
+(`env` or `file`) and never prompts.
 
 | Method | Command | Notes |
 |---|---|---|

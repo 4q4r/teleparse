@@ -119,6 +119,44 @@ func TestStatsRunsExportAgainstEmptyState(t *testing.T) {
 	assert.Contains(t, err.Error(), "run linkage")
 }
 
+func TestAuthLoginNonTTYWithoutCredsPrintsActionableError(t *testing.T) {
+	// Serial: t.Setenv cannot run in parallel tests.
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "xdg"))
+	t.Setenv("TELEPARSE_API_ID", "")
+	t.Setenv("TELEPARSE_API_HASH", "")
+
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+
+	// go test pipes stdin, so auth login takes the non-interactive branch.
+	_, err := execute(t, "--config", configPath, "auth", "login")
+	require.Error(t, err)
+
+	message := err.Error()
+	assert.Contains(t, message, "TELEPARSE_API_ID=")
+	assert.Contains(t, message, "TELEPARSE_API_HASH=")
+	assert.Contains(t, message, "my.telegram.org")
+	assert.Contains(t, message, "auth login")
+
+	// The dl-family surfaces the same single error.
+	_, err = execute(t, "--config", configPath, "chats", "list")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "TELEPARSE_API_ID=")
+	assert.Contains(t, err.Error(), "my.telegram.org")
+}
+
+func TestRootRegistersColorControlFlags(t *testing.T) {
+	t.Parallel()
+
+	root := cli.New()
+
+	require.NotNil(t, root.PersistentFlags().Lookup("no-color"))
+	require.NotNil(t, root.PersistentFlags().Lookup("no-ascii"))
+
+	out, err := execute(t, "auth", "login", "--help")
+	require.NoError(t, err)
+	assert.Contains(t, out, "no-color")
+}
+
 func commandByName(t *testing.T, root *cobra.Command, name string) *cobra.Command {
 	t.Helper()
 

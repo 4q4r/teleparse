@@ -47,22 +47,21 @@ func TestSOCKS5DialRunsThroughContextDialer(t *testing.T) {
 }
 
 // TestLoginLogoutFailOfflineWithoutCreds covers the credential gate: Login
-// and Logout refuse to start a client when the API credentials are unset,
-// which is the first offline-reachable branch of the client.Run shell. The
-// authorized paths need a live MTProto connection (see smoke_test.go for
-// the documented boundary).
+// and Logout refuse to start a client when the passed credentials are the
+// zero pair, which is the first offline-reachable branch of the client.Run
+// shell. The authorized paths need a live MTProto connection (see
+// smoke_test.go for the documented boundary).
 func TestLoginLogoutFailOfflineWithoutCreds(t *testing.T) {
-	t.Setenv("TELEPARSE_API_ID", "")
-	t.Setenv("TELEPARSE_API_HASH", "")
+	t.Parallel()
 
 	cfg := &config.Config{}
 	paths := &config.Paths{}
 
-	err := tg.Login(t.Context(), "main", "+15551234567", nil, cfg, paths)
-	require.ErrorIs(t, err, tg.ErrAPICredsMissing)
+	err := tg.Login(t.Context(), "main", tg.Creds{}, "+15551234567", nil, cfg, paths)
+	require.ErrorIs(t, err, tg.ErrCredsUnset)
 
-	err = tg.Logout(t.Context(), "main", cfg, paths)
-	require.ErrorIs(t, err, tg.ErrAPICredsMissing)
+	err = tg.Logout(t.Context(), "main", tg.Creds{}, cfg, paths)
+	require.ErrorIs(t, err, tg.ErrCredsUnset)
 }
 
 // TestLoginRunSetupAbortsBeforeDialing covers Run's offline setup chain
@@ -71,8 +70,9 @@ func TestLoginLogoutFailOfflineWithoutCreds(t *testing.T) {
 // context ends the run before any packet leaves the machine (gotd treats
 // ctx cancellation as a graceful stop and returns nil).
 func TestLoginRunSetupAbortsBeforeDialing(t *testing.T) {
-	t.Setenv("TELEPARSE_API_ID", "123456")
-	t.Setenv("TELEPARSE_API_HASH", "deadbeefcafe")
+	t.Parallel()
+
+	creds := tg.Creds{APIID: 123456, APIHash: "deadbeefcafe"}
 
 	root := filepath.Join(t.TempDir(), "accounts")
 	paths := &config.Paths{AccountsDir: root}
@@ -80,7 +80,7 @@ func TestLoginRunSetupAbortsBeforeDialing(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	require.NoError(t, tg.Login(ctx, "main", "+15551234567", nil, &config.Config{}, paths))
+	require.NoError(t, tg.Login(ctx, "main", creds, "+15551234567", nil, &config.Config{}, paths))
 
 	_, err := os.Stat(filepath.Join(root, "main", "device.json"))
 	require.NoError(t, err, "the offline setup chain must run before any dial")

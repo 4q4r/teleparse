@@ -28,7 +28,7 @@ func TestResolveLoginMethodExplicitFlagsSkipMenu(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			plan, err := resolveLoginMethod(tc.qr, tc.phone, tc.telethon, tc.tdata, true, failingAsk)
+			plan, err := resolveLoginMethod(loginMenuBody, tc.qr, tc.phone, tc.telethon, tc.tdata, true, failingAsk)
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, plan)
 		})
@@ -38,7 +38,7 @@ func TestResolveLoginMethodExplicitFlagsSkipMenu(t *testing.T) {
 func TestResolveLoginMethodNonInteractiveDefaultsToPhone(t *testing.T) {
 	t.Parallel()
 
-	plan, err := resolveLoginMethod(false, "", "", "", false, failingAsk)
+	plan, err := resolveLoginMethod(loginMenuBody, false, "", "", "", false, failingAsk)
 	require.NoError(t, err)
 	assert.Equal(t, loginPlan{}, plan)
 }
@@ -64,7 +64,7 @@ func TestResolveLoginMethodMenuChoices(t *testing.T) {
 			t.Parallel()
 
 			ask := scriptedAsk(tc.answers)
-			plan, err := resolveLoginMethod(false, "", "", "", true, ask)
+			plan, err := resolveLoginMethod(loginMenuBody, false, "", "", "", true, ask)
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, plan)
 		})
@@ -74,19 +74,19 @@ func TestResolveLoginMethodMenuChoices(t *testing.T) {
 func TestResolveLoginMethodMenuErrors(t *testing.T) {
 	t.Parallel()
 
-	_, err := resolveLoginMethod(false, "", "", "", true, scriptedAsk([]string{"7"}))
+	_, err := resolveLoginMethod(loginMenuBody, false, "", "", "", true, scriptedAsk([]string{"7"}))
 	require.Error(t, err)
 	require.ErrorIs(t, err, errBadLoginChoice)
 
-	_, err = resolveLoginMethod(false, "", "", "", true, scriptedAsk([]string{"3", ""}))
+	_, err = resolveLoginMethod(loginMenuBody, false, "", "", "", true, scriptedAsk([]string{"3", ""}))
 	require.Error(t, err)
 	require.ErrorIs(t, err, errLoginPathRequired)
 
-	_, err = resolveLoginMethod(false, "", "", "", true, scriptedAsk([]string{"4", ""}))
+	_, err = resolveLoginMethod(loginMenuBody, false, "", "", "", true, scriptedAsk([]string{"4", ""}))
 	require.Error(t, err)
 	require.ErrorIs(t, err, errLoginPathRequired)
 
-	_, err = resolveLoginMethod(false, "", "", "", true, failingAsk)
+	_, err = resolveLoginMethod(loginMenuBody, false, "", "", "", true, failingAsk)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "read login method")
 }
