@@ -22,8 +22,6 @@ builds:
 
 archives:
   - id: default
-    builds:
-      - teleparse
     name_template: >-
       {{ .ProjectName }}_
       {{- title .Os }}_
