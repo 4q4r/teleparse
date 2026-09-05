@@ -50,6 +50,7 @@ type scanState struct {
 	total     int
 	done      int
 	matched   int64
+	cached    int64
 	durations []time.Duration
 	current   string
 	spinner   int
@@ -67,13 +68,17 @@ func (s *scanState) chatStart(title string) {
 	s.current = title
 }
 
-// chatDone records one completed walk: it settles the chat's line,
-// advances the counters and feeds the ETA moving average.
-func (s *scanState) chatDone(title string, matches int, took time.Duration) {
+// chatDone records one completed walk: it settles the chat's line with
+// the total of fresh and cached matches (cached being the prior-run
+// manifest rows an incremental walk carries), advances the counters — the
+// footer's matched count includes those cached rows — and feeds the ETA
+// moving average.
+func (s *scanState) chatDone(title string, matches, cached int, took time.Duration) {
 	s.done++
-	s.matched += int64(matches)
+	s.matched += int64(matches + cached)
+	s.cached += int64(cached)
 	s.durations = appendBounded(s.durations, took, scanEtaWindow)
-	s.settled = append(s.settled, scanDoneEntry{title: title, matches: matches})
+	s.settled = append(s.settled, scanDoneEntry{title: title, matches: matches + cached})
 
 	if s.current == title {
 		s.current = ""
@@ -131,11 +136,14 @@ func (s *scanState) lines(styler Styler) []string {
 	return out
 }
 
-// footer renders the bottom status line: progress, matches, elapsed, ETA.
+// footer renders the bottom status line: progress, matches (cached rows
+// of incremental walks included, annotated like the counts tables),
+// elapsed, ETA.
 func (s *scanState) footer(styler Styler) string {
 	head := []string{
 		styler.Dim("scanning") + " " + styler.Success(s.progressText()),
-		styler.Dim("matched") + " " + styler.Success(strconv.FormatInt(s.matched, 10)+" files"),
+		styler.Dim("matched") + " " + styler.Success(strconv.FormatInt(s.matched, 10)+" files") +
+			cachedSuffix(styler, int(s.cached)),
 		scanElapsed(s.now().Sub(s.started)),
 	}
 
@@ -171,6 +179,7 @@ type (
 	scanChatMsg  struct {
 		title   string
 		matches int
+		cached  int
 		took    time.Duration
 	}
 	scanNoteMsg struct{ line string }
@@ -196,7 +205,7 @@ func (m scanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn /
 	case scanStartMsg:
 		m.state.chatStart(typed.title)
 	case scanChatMsg:
-		m.state.chatDone(typed.title, typed.matches, typed.took)
+		m.state.chatDone(typed.title, typed.matches, typed.cached, typed.took)
 	case scanNoteMsg:
 		m.state.notes = append(m.state.notes, typed.line)
 	default:
@@ -275,14 +284,18 @@ func (p *scanProgress) chatStart(title string) {
 	p.program.Send(scanStartMsg{title: title})
 }
 
-// chatDone reports one completed walk; took is the wall-clock walk time.
-func (p *scanProgress) chatDone(title string, matches int, took time.Duration) {
+// chatDone reports one completed walk; matches counts this run's fresh
+// matches and cached the prior-run manifest matches an incremental walk
+// carries (rendered on the live view only — the line surface keeps its
+// stable fresh-only format and lets the tables and transition line that
+// follow carry the cached totals). took is the wall-clock walk time.
+func (p *scanProgress) chatDone(title string, matches, cached int, took time.Duration) {
 	if p == nil {
 		return
 	}
 
 	if p.tty {
-		p.program.Send(scanChatMsg{title: title, matches: matches, took: took})
+		p.program.Send(scanChatMsg{title: title, matches: matches, cached: cached, took: took})
 
 		return
 	}

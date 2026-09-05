@@ -103,8 +103,8 @@ func TestWalkHandoverSettlesLinesBeforeTransitionPrint(t *testing.T) {
 
 	progress := &scanProgress{out: cmd.ErrOrStderr(), total: 2, styler: NewStyler(false)}
 
-	progress.chatDone("News", 4, time.Second)
-	progress.chatDone("Docs", 1, time.Second)
+	progress.chatDone("News", 4, 0, time.Second)
+	progress.chatDone("Docs", 1, 0, time.Second)
 	progress.close()
 
 	require.NoError(t, printWalkTransition(cmd, &App{}, 2, 5, 0))
