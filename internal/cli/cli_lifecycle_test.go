@@ -223,6 +223,8 @@ func TestDoctorFailsWithoutCreds(t *testing.T) {
 
 	t.Setenv("TELEPARSE_API_ID", "")
 	t.Setenv("TELEPARSE_API_HASH", "")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(t.TempDir(), "data"))
 
@@ -260,9 +262,17 @@ func TestProxyShowHonorsEnv(t *testing.T) {
 
 func TestNetworkCommandsFailFastWithoutCreds(t *testing.T) {
 	// Serial: t.Setenv cannot run in parallel tests.
+	//
+	// Hermetic: real credentials in the user environment (env vars, the
+	// saved credentials.toml, leftover sessions) must never leak in —
+	// isolate both the credentials chain and the XDG account/state dirs.
 
 	t.Setenv("TELEPARSE_API_ID", "")
 	t.Setenv("TELEPARSE_API_HASH", "")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	for _, name := range []string{"dl", "scan", "sync"} {
 		started := time.Now()
@@ -282,6 +292,8 @@ func TestAccountAllEnumeratesLocalSessions(t *testing.T) {
 
 	t.Setenv("TELEPARSE_API_ID", "")
 	t.Setenv("TELEPARSE_API_HASH", "")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	configHome := filepath.Join(t.TempDir(), "config")
 	t.Setenv("XDG_CONFIG_HOME", configHome)
@@ -338,6 +350,8 @@ func TestAuthCommandsFailFastWithoutCreds(t *testing.T) {
 
 	t.Setenv("TELEPARSE_API_ID", "")
 	t.Setenv("TELEPARSE_API_HASH", "")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(t.TempDir(), "data"))
 
@@ -359,6 +373,8 @@ func TestResumeFlows(t *testing.T) {
 
 	t.Setenv("TELEPARSE_API_ID", "")
 	t.Setenv("TELEPARSE_API_HASH", "")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	cfg := tempConfigPath(t)
 	dataHome := seedState(t)
