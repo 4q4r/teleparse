@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"github.com/stretchr/testify/assert"
 )
 
 // fakeClock pins the live state's time source; tests advance it explicitly.
@@ -260,4 +262,21 @@ func TestLiveStateUnknownKeysAreNoops(t *testing.T) {
 	if lines := state.lines(100); len(lines) == 0 {
 		t.Errorf("unknown-key updates must not crash or render")
 	}
+}
+
+// TestLiveStateSurfacesFailureReasons pins that failed transfers expose
+// their reason in the visible block and the final summary.
+func TestLiveStateSurfacesFailureReasons(t *testing.T) {
+	t.Parallel()
+
+	state, _ := newTestState()
+	state.itemStart("k1", "archive.zip", 100, 0)
+	state.itemFailed("k1", "rpc error code 403: TAKEOUT_REQUIRED")
+
+	visible := strings.Join(state.lines(80), "\n")
+	assert.Contains(t, visible, "FAIL")
+	assert.Contains(t, visible, "TAKEOUT_REQUIRED")
+
+	summary := state.summaryLine()
+	assert.Contains(t, summary, "FAIL rpc error code 403: TAKEOUT_REQUIRED")
 }

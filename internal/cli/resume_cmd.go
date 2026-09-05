@@ -170,7 +170,7 @@ func resumeOne(app *App, cmd *cobra.Command, run store.Run) error {
 	) error {
 		return withAPI(ctx, client, cfg.Net.Takeout, func(ctx context.Context, api *tgapi.Client) error {
 			return executeRun(ctx, cmd, app, run.Account, textOrDefault(run.Profile),
-				opts, plan, payload.Chats, runMode{}, api, client)
+				opts, plan, payload.Chats, runMode{}, api, client, cfg.Net.Takeout)
 		}, func(finishErr error) {
 			if app.silentMode(cmd) {
 				return
