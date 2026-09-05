@@ -15,28 +15,35 @@ import (
 )
 
 // Live scan tuning: the repaint cadence, how many recent per-chat walk
-// durations feed the ETA average, the trail depth of recently scanned
-// chats, the title truncation width and the clock scale factors.
+// durations feed the ETA average and the title truncation width.
 const (
 	scanRefresh    = 100 * time.Millisecond
 	scanEtaWindow  = 12
-	scanTrailLen   = 2
 	scanTitleWidth = 36
 	scanSecsPerMin = 60
 	scanSecsPerHor = 3600
 )
 
-// scanTrailEntry is one recently completed chat in the trail.
-type scanTrailEntry struct {
+// scanSpinners holds the spinner frame sets: braille on unicode terminals
+// (the uv look), ASCII fallback under --no-ascii.
+var scanSpinners = struct{ braille, ascii []string }{ //nolint:gochecknoglobals // immutable frame tables
+	braille: []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"},
+	ascii:   []string{"|", "/", "-", "\\"},
+}
+
+// scanDoneEntry is one settled chat line, kept forever (uv-style: finished
+// items persist and scroll into the terminal history).
+type scanDoneEntry struct {
 	title   string
 	matches int
 }
 
-// scanState is the pure, terminal-free model behind the live scan walk
-// view: counters, per-chat durations and the recent-chat trail are plain
-// functions of the injected clock, so unit tests drive it
-// deterministically. It is not safe for concurrent use; the tea program
-// serializes updates in production.
+// scanState is the pure, terminal-free model behind the live scan view:
+// settled chat lines accumulate top-down, the chat currently being walked
+// renders with a spinner, and the counters footer stays at the bottom like
+// uv's status line. Everything is a function of the injected clock, so
+// unit tests drive it deterministically. Not safe for concurrent use; the
+// tea program serializes updates in production.
 type scanState struct {
 	now       func() time.Time
 	started   time.Time
@@ -44,23 +51,31 @@ type scanState struct {
 	done      int
 	matched   int64
 	durations []time.Duration
-	trail     []scanTrailEntry
+	current   string
+	spinner   int
+	asciiOnly bool
+	settled   []scanDoneEntry
 }
 
-func newScanState(now func() time.Time, total int) *scanState {
-	return &scanState{now: now, started: now(), total: total}
+func newScanState(now func() time.Time, total int, asciiOnly bool) *scanState {
+	return &scanState{now: now, started: now(), total: total, asciiOnly: asciiOnly}
 }
 
-// chatDone records one completed walk: its match count and duration. The
-// duration feeds the ETA moving average; the chat joins the trail.
+// chatStart marks a chat as the one being walked right now.
+func (s *scanState) chatStart(title string) {
+	s.current = title
+}
+
+// chatDone records one completed walk: it settles the chat's line,
+// advances the counters and feeds the ETA moving average.
 func (s *scanState) chatDone(title string, matches int, took time.Duration) {
 	s.done++
 	s.matched += int64(matches)
 	s.durations = appendBounded(s.durations, took, scanEtaWindow)
-	s.trail = appendBoundedTrail(s.trail, scanTrailEntry{title: title, matches: matches})
+	s.settled = append(s.settled, scanDoneEntry{title: title, matches: matches})
 
-	if len(s.durations) > scanEtaWindow {
-		s.durations = s.durations[len(s.durations)-scanEtaWindow:]
+	if s.current == title {
+		s.current = ""
 	}
 }
 
@@ -71,16 +86,6 @@ func appendBounded[T any](slice []T, item T, limit int) []T {
 	}
 
 	return append(slice, item)
-}
-
-// appendBoundedTrail keeps the trail growing from scratch and never
-// evicting below its own length; the newest entry renders last.
-func appendBoundedTrail(trail []scanTrailEntry, entry scanTrailEntry) []scanTrailEntry {
-	if len(trail) >= scanTrailLen {
-		trail = trail[len(trail)-scanTrailLen+1:]
-	}
-
-	return append(trail, entry)
 }
 
 // eta projects the remaining walk time from the moving average of recent
@@ -102,10 +107,28 @@ func (s *scanState) eta() (time.Duration, bool) {
 	return sum / time.Duration(len(s.durations)) * time.Duration(remaining), true
 }
 
-// lines renders the live block: a head line with counters, elapsed time
-// and the ETA, plus a one-line summary of the last scanTrailLen completed
-// chats (newest last). The ETA segment disappears once the walk finishes.
+// lines renders the uv-style block: settled chat lines ("+ Title (N)"),
+// the spinner line for the chat being walked, and the counters footer
+// (scanning X/Y, matched, elapsed, ETA) pinned last.
 func (s *scanState) lines(styler Styler) []string {
+	out := make([]string, 0, len(s.settled)+2)
+
+	for _, entry := range s.settled {
+		out = append(out, styler.Success("+")+" "+truncateScanTitle(entry.title)+" ("+
+			styler.Success(strconv.Itoa(entry.matches))+")")
+	}
+
+	if s.current != "" && s.done < s.total {
+		out = append(out, styler.Dim(s.spin())+" "+truncateScanTitle(s.current))
+	}
+
+	out = append(out, s.footer(styler))
+
+	return out
+}
+
+// footer renders the bottom status line: progress, matches, elapsed, ETA.
+func (s *scanState) footer(styler Styler) string {
 	head := []string{
 		styler.Dim("scanning") + " " + styler.Success(s.progressText()),
 		styler.Dim("matched") + " " + styler.Success(strconv.FormatInt(s.matched, 10)+" files"),
@@ -118,13 +141,17 @@ func (s *scanState) lines(styler Styler) []string {
 		head = append(head, styler.Dim("ETA")+" --")
 	}
 
-	out := []string{strings.Join(head, "  ")}
+	return strings.Join(head, "  ")
+}
 
-	if summary, ok := s.trailSummary(styler); ok {
-		out = append(out, summary)
+// spin renders the current spinner frame for the active chat line.
+func (s *scanState) spin() string {
+	frames := scanSpinners.braille
+	if s.asciiOnly {
+		frames = scanSpinners.ascii
 	}
 
-	return out
+	return frames[s.spinner%len(frames)]
 }
 
 // progressText renders the done/total counter.
@@ -132,28 +159,12 @@ func (s *scanState) progressText() string {
 	return strconv.Itoa(s.done) + "/" + strconv.Itoa(s.total)
 }
 
-// trailSummary renders the recent-chats line: a dim "last chats" label
-// followed by "Title (N)" entries, newest last — self-explanatory without
-// tree-drawing glyphs.
-func (s *scanState) trailSummary(styler Styler) (string, bool) {
-	if len(s.trail) == 0 {
-		return "", false
-	}
-
-	parts := make([]string, 0, len(s.trail))
-
-	for _, entry := range s.trail {
-		parts = append(parts, truncateScanTitle(entry.title)+" ("+
-			styler.Success(strconv.Itoa(entry.matches))+")")
-	}
-
-	return styler.Dim("last chats:") + " " + strings.Join(parts, ", "), true
-}
-
-// Live scan messages: each completed walk becomes one immutable message
-// applied inside the tea update loop; ticks keep the clock fields fresh.
+// Live scan messages: chat starts and completions are immutable messages
+// applied inside the tea update loop; ticks animate the spinner and keep
+// the clock fresh.
 type (
-	scanChatMsg struct {
+	scanStartMsg struct{ title string }
+	scanChatMsg  struct {
 		title   string
 		matches int
 		took    time.Duration
@@ -174,7 +185,11 @@ func (m scanModel) Init() tea.Cmd {
 func (m scanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn // the tea Model contract
 	switch typed := msg.(type) {
 	case scanTickMsg:
+		m.state.spinner++
+
 		return m, tea.Tick(scanRefresh, func(t time.Time) tea.Msg { return scanTickMsg(t) })
+	case scanStartMsg:
+		m.state.chatStart(typed.title)
 	case scanChatMsg:
 		m.state.chatDone(typed.title, typed.matches, typed.took)
 	default:
@@ -201,17 +216,17 @@ type scanProgress struct {
 	tty     bool
 }
 
-// newScanProgress picks the scan progress surface: the live bubbletea
-// block when stderr is a terminal (--no-ascii forces the line surface
-// even on terminals, the block repaints with ANSI escapes), one line per
-// chat otherwise, nothing at all under -s or with no targets.
+// newScanProgress picks the scan progress surface: the uv-style live view
+// when stderr is a terminal (--no-ascii forces the line surface — the
+// block repaints with ANSI and shows a braille spinner otherwise), one
+// line per chat otherwise, nothing at all under -s or with no targets.
 func newScanProgress(cmd *cobra.Command, app *App, total int) *scanProgress {
 	if app == nil || total == 0 || app.silentMode(cmd) {
 		return nil
 	}
 
 	if !app.noASCII && term.IsTerminal(int(os.Stderr.Fd())) {
-		state := newScanState(time.Now, total)
+		state := newScanState(time.Now, total, app.noASCII)
 
 		program := tea.NewProgram(scanModel{state: state, styler: app.errStyle},
 			tea.WithOutput(cmd.ErrOrStderr()),
@@ -227,6 +242,15 @@ func newScanProgress(cmd *cobra.Command, app *App, total int) *scanProgress {
 	}
 
 	return &scanProgress{out: cmd.ErrOrStderr(), styler: app.errStyle, total: total}
+}
+
+// chatStart reports that the walk of title began.
+func (p *scanProgress) chatStart(title string) {
+	if p == nil || !p.tty {
+		return
+	}
+
+	p.program.Send(scanStartMsg{title: title})
 }
 
 // chatDone reports one completed walk; took is the wall-clock walk time.

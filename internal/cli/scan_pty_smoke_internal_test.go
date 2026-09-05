@@ -37,7 +37,7 @@ func TestScanProgressPTYSmoke(t *testing.T) {
 
 	styler := NewStyler(true)
 
-	state := newScanState(elapsedScanClock(90*time.Second), 254)
+	state := newScanState(elapsedScanClock(90*time.Second), 254, false)
 	model := scanModel{state: state, styler: styler}
 
 	// First frame: one chat done, ETA already meaningful.
