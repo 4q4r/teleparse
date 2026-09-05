@@ -246,7 +246,7 @@ func Default() *Config {
 			Incremental: true,
 		},
 		Filters: Filters{
-			Dedupe: "unique-id",
+			Dedupe: "hardlink",
 			Recursion: Recursion{
 				Topics: true,
 				Albums: "expand",

@@ -81,6 +81,14 @@ func TestOptionsValidateVocabularies(t *testing.T) {
 			name:   "all good",
 			mutate: func(o *filters.Options) { o.Media = []string{"photo", "video-note", "gif"} },
 		},
+		{
+			name:   "hardlink dedupe mode accepted",
+			mutate: func(o *filters.Options) { o.Dedupe = "hardlink" },
+		},
+		{
+			name:   "legacy dedupe modes accepted",
+			mutate: func(o *filters.Options) { o.Dedupe = "unique-id" },
+		},
 	}
 
 	for _, tc := range cases {
