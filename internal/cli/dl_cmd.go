@@ -261,20 +261,40 @@ func executeRun(ctx context.Context, cmd *cobra.Command, app *App, account, prof
 
 	resolver, collector := newRunResolver(app, api)
 
+	// Preview modes (scan, dry-run, count-only) show the live walk
+	// progress; plain dl gets its download LiveReporter instead.
+	var progress *scanProgress
+
+	if mode.dryRun || mode.countOnly {
+		progress = newScanProgress(cmd, app, len(targets))
+	}
+
+	walkStarted := time.Now()
+
 	for _, target := range targets {
 		if err := state.UpsertChat(ctx, chatFromTarget(target)); err != nil {
+			progress.close()
+
 			return finishRunE(ctx, state, runID, err)
 		}
 
 		resolver.peers[target.Chat.ID] = target.InputPeer
 
+		before, began := len(collector.items), time.Now()
+
 		if err := walkTarget(ctx, state, api, target, plan, opts, mode, collector); err != nil {
+			progress.close()
+
 			return finishRunE(ctx, state, runID, err)
 		}
+
+		progress.chatDone(target.Chat.Title, len(collector.items)-before, time.Since(began))
 	}
 
+	progress.close()
+
 	if mode.dryRun || mode.countOnly {
-		return previewRun(ctx, cmd, state, runID, collector, targets, mode)
+		return previewRun(ctx, cmd, app, state, runID, collector, targets, mode, time.Since(walkStarted))
 	}
 
 	return downloadRun(ctx, cmd, state, app, runID, account, resolver, collector, targets, mode, opts, api, client)
@@ -349,8 +369,8 @@ func newRunResolver(app *App, api refetchAPI) (*runResolver, *walkCollector) {
 	}, &walkCollector{cache: cache, maxSeen: map[int64]int64{}}
 }
 
-func previewRun(ctx context.Context, cmd *cobra.Command, state *store.Store, runID string,
-	collector *walkCollector, targets []scan.Target, mode runMode,
+func previewRun(ctx context.Context, cmd *cobra.Command, app *App, state *store.Store, runID string,
+	collector *walkCollector, targets []scan.Target, mode runMode, walkTime time.Duration,
 ) error {
 	for idx := range collector.items {
 		item := collector.items[idx]
@@ -362,10 +382,14 @@ func previewRun(ctx context.Context, cmd *cobra.Command, state *store.Store, run
 	}
 
 	if mode.countOnly {
-		if err := printCounts(cmd, collector, targets); err != nil {
+		if err := printCounts(cmd, app, collector, targets); err != nil {
 			return err
 		}
 	} else if err := printPlan(cmd, collector); err != nil {
+		return err
+	}
+
+	if err := printScanSummary(cmd, app, len(targets), len(collector.items), walkTime); err != nil {
 		return err
 	}
 
@@ -681,23 +705,6 @@ func printPlan(cmd *cobra.Command, collector *walkCollector) error {
 	return printLine(cmd, "total: %d file(s), %s\n", len(collector.items), humanTotalSize(collector))
 }
 
-func printCounts(cmd *cobra.Command, collector *walkCollector, targets []scan.Target) error {
-	writer := tabWriter(cmd)
-
-	if _, err := fmt.Fprintln(writer, "CHAT\tTITLE\tMATCHES"); err != nil {
-		return fmt.Errorf("write counts header: %w", err)
-	}
-
-	for _, target := range targets {
-		if _, err := fmt.Fprintf(writer, "%d\t%s\t%d\n",
-			target.Chat.ID, target.Chat.Title, countFor(collector, target.Chat.ID)); err != nil {
-			return fmt.Errorf("write counts row: %w", err)
-		}
-	}
-
-	return flushWriter(writer, cmd)
-}
-
 // printSummary renders the final one-line dl/sync outcome.
 func printSummary(cmd *cobra.Command, res download.Result, took time.Duration) error {
 	return printLine(cmd, "downloaded: %d (%s), skipped: %d, failed: %d, retries: %d, took %s\n",
@@ -802,8 +809,11 @@ func filterMinAgeWithProgress(
 	kept, err := scan.FilterByMinAge(ctx, api, targets, minAge, report)
 
 	if app != nil && !app.silentMode(cmd) {
-		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "\rchat-min-age %s: probing %d chats... done, kept %d/%d\n",
-			label, len(targets), len(kept), len(targets)); err != nil {
+		line := app.errStyle.Dim("chat-min-age "+label+":") + fmt.Sprintf(" probing %d chats... ", len(targets)) +
+			app.errStyle.Success("done") + ", kept " +
+			app.errStyle.Success(fmt.Sprintf("%d/%d", len(kept), len(targets))) + "\n"
+
+		if _, err := fmt.Fprint(cmd.ErrOrStderr(), "\r"+line); err != nil {
 			return nil, fmt.Errorf("print min-age summary: %w", err)
 		}
 	}
@@ -825,7 +835,8 @@ func minAgeProgressReporter(cmd *cobra.Command, app *App, label string, total in
 			return
 		}
 
-		line := fmt.Sprintf("chat-min-age %s: probing %d chats... %d/%d", label, all, done, all)
+		line := app.errStyle.Dim("chat-min-age "+label+":") +
+			fmt.Sprintf(" probing %d chats... %s", all, app.errStyle.Success(fmt.Sprintf("%d/%d", done, all)))
 
 		if _, err := fmt.Fprint(cmd.ErrOrStderr(), "\r"+line); err != nil {
 			return
