@@ -246,7 +246,7 @@ func (s *liveState) lines(width int) []string {
 	out = append(out, s.totalsLine(now))
 
 	for _, reason := range s.failReasons {
-		out = append(out, truncateLive("FAIL "+reason, width))
+		out = append(out, failLine(reason, width))
 	}
 
 	if s.throttleNote != "" && now.Before(s.throttleUntil) {
@@ -307,6 +307,20 @@ func (s *liveState) totalSamples(now time.Time) []speedSample {
 
 // liveReasonWidth bounds failure-reason lines in the live view.
 const liveReasonWidth = 100
+
+// failMarker prefixes every settled failure line.
+const failMarker = "FAIL "
+
+// failLine renders one settled failure: the FAIL marker stays pinned at
+// the head while the reason is tail-truncated — Telegram errors end with
+// their machine code, which a head truncation would clip away.
+func failLine(reason string, width int) string {
+	if width <= len(failMarker) {
+		return truncateLiveTail(failMarker+reason, width)
+	}
+
+	return failMarker + truncateLiveTail(reason, width-len(failMarker))
+}
 
 // errString renders an error for the live view (nil-safe).
 func errString(err error) string {
@@ -474,9 +488,10 @@ func (r *LiveReporter) ItemDone(key string, failed bool) {
 
 // ItemFailedDetail implements FailureDetailReporter: the live view settles
 // failure counts through the counters, so the detail reduces to retiring
-// the transfer line.
+// the transfer line. The reason is tail-truncated to liveReasonWidth —
+// the rpc code lives at the end.
 func (r *LiveReporter) ItemFailedDetail(key string, _ int, err error) {
-	r.program.Send(liveFailMsg{key: key, reason: truncateLive(errString(err), liveReasonWidth)})
+	r.program.Send(liveFailMsg{key: key, reason: truncateLiveTail(errString(err), liveReasonWidth)})
 }
 
 // Throttled implements ItemReporter by surfacing a server flood wait.

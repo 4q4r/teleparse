@@ -28,6 +28,12 @@ var ErrMessageGone = errors.New("source message gone")
 // downloadable; no retry can recover the item.
 var ErrMediaGone = errors.New("message media gone")
 
+// ErrFileTooBigForTakeout reports a file exceeding the active takeout
+// session's per-account size cap (2GiB, raised to 4GiB by Telegram
+// Premium); no retry inside the session can recover it.
+var ErrFileTooBigForTakeout = errors.New(
+	"file too big for the takeout session (2GiB cap; Telegram Premium raises it to 4GiB)")
+
 // RefetchFunc rebuilds the file location by refetching the source message:
 // when the stored file_reference has expired, or when an item carries no
 // location at all because its walk context is gone (cached manifest rows).

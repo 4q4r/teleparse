@@ -2,9 +2,14 @@ package cli
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/4q4r/teleparse/internal/config"
+	"github.com/4q4r/teleparse/internal/tg"
 
 	"github.com/gotd/td/tgerr"
 
@@ -165,4 +170,99 @@ func TestIsTakeoutInitFailure(t *testing.T) {
 		tgerr.New(420, "TAKEOUT_SESSION_TOO_MANY"))))
 	assert.False(t, isTakeoutInitFailure(assert.AnError))
 	assert.False(t, isTakeoutInitFailure(nil))
+}
+
+// takeoutGib is 1GiB in bytes; cap assertions build their expected values
+// from it independently of the production constants.
+const takeoutGib int64 = 1 << 30
+
+// writeTakeoutPremiumCache seeds a fresh premium cache record so the
+// cache-only resolution in runAccountSession has an answer without a query.
+func writeTakeoutPremiumCache(t *testing.T, dir, name string, premium bool) {
+	t.Helper()
+
+	accountDir := filepath.Join(dir, name)
+	require.NoError(t, os.MkdirAll(accountDir, 0o700))
+
+	blob := `{"premium": ` + strconv.FormatBool(premium) + `, "checked_at": "` +
+		time.Now().UTC().Format(time.RFC3339Nano) + `"}` + "\n"
+
+	require.NoError(t, os.WriteFile(filepath.Join(accountDir, "premium.json"), []byte(blob), 0o600))
+}
+
+// TestTakeoutConfigForFileMaxSize pins the session config: FileMaxSize
+// must carry the account cap (2GiB base, 4GiB premium) or the server
+// session allows no file bytes at all.
+func TestTakeoutConfigForFileMaxSize(t *testing.T) {
+	t.Parallel()
+
+	base := takeoutConfigFor(false)
+	assert.Equal(t, 2*takeoutGib, base.FileMaxSize, "non-premium accounts cap at 2GiB")
+	assert.True(t, base.Files)
+	assert.True(t, base.MessageUsers)
+	assert.True(t, base.MessageChats)
+	assert.True(t, base.MessageMegagroups)
+	assert.True(t, base.MessageChannels)
+
+	premium := takeoutConfigFor(true)
+	assert.Equal(t, 4*takeoutGib, premium.FileMaxSize, "premium accounts cap at 4GiB")
+	assert.True(t, premium.Files)
+}
+
+// TestTakeoutCapResolvesFromPremiumCacheOnly pins the cached-or-skip rule:
+// the cap resolution before the session opens reads the premium cache and
+// never queries; unknown answers default to the base cap.
+func TestTakeoutCapResolvesFromPremiumCacheOnly(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	manager := tg.NewAccountManager(dir)
+
+	unknown := manager.AccountPremium(t.Context(), "acct", nil)
+	require.Equal(t, tg.PremiumSourceNone, unknown.Source)
+	assert.Equal(t, 2*takeoutGib, takeoutCapFor(unknown.Premium), "unknown premium defaults to 2GiB")
+
+	writeTakeoutPremiumCache(t, dir, "acct", true)
+
+	premium := manager.AccountPremium(t.Context(), "acct", nil)
+	require.Equal(t, tg.PremiumSourceCache, premium.Source)
+	assert.True(t, premium.Premium)
+	assert.Equal(t, 4*takeoutGib, takeoutCapFor(premium.Premium), "a cached premium answer yields 4GiB")
+
+	writeTakeoutPremiumCache(t, dir, "plain", false)
+
+	plain := manager.AccountPremium(t.Context(), "plain", nil)
+	require.Equal(t, tg.PremiumSourceCache, plain.Source)
+	assert.Equal(t, 2*takeoutGib, takeoutCapFor(plain.Premium), "a cached non-premium answer yields 2GiB")
+}
+
+// TestTakeoutFileCapActiveOnlyUnderTakeout pins the download-side cap: no
+// active takeout session means no cap at all.
+func TestTakeoutFileCapActiveOnlyUnderTakeout(t *testing.T) {
+	t.Parallel()
+
+	assert.Zero(t, takeoutFileCap(false, true))
+	assert.Zero(t, takeoutFileCap(false, false))
+	assert.Equal(t, 2*takeoutGib, takeoutFileCap(true, false))
+	assert.Equal(t, 4*takeoutGib, takeoutFileCap(true, true))
+}
+
+// TestTakeoutCapNotice pins the engagement-notice cap line: it always
+// names the active cap and how premium raises it.
+func TestTakeoutCapNotice(t *testing.T) {
+	t.Parallel()
+
+	unknown := takeoutCapNotice(tg.PremiumStatus{Source: tg.PremiumSourceNone})
+	assert.Contains(t, unknown, "2.0GiB", "unknown premium engages the base cap")
+	assert.Contains(t, unknown, "4.0GiB", "the notice must say premium raises the cap")
+	assert.Contains(t, unknown, "premium unknown")
+
+	premium := takeoutCapNotice(tg.PremiumStatus{Premium: true, Source: tg.PremiumSourceCache})
+	assert.Contains(t, premium, "4.0GiB")
+	assert.Contains(t, premium, "premium")
+
+	plain := takeoutCapNotice(tg.PremiumStatus{Source: tg.PremiumSourceCache})
+	assert.Contains(t, plain, "2.0GiB")
+	assert.Contains(t, plain, "4.0GiB")
 }

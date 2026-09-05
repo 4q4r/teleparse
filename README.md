@@ -351,7 +351,9 @@ session token. Carriers: `websocket` / `websocket-lanes` (primary), `https` / `h
 - `FloodWait ≤ threshold` → auto-sleep; longer → run **parked** with `resume_at`,
   `teleparse resume` continues later.
 - `--takeout` wraps the session in Telegram's takeout mode — the sanctioned export path with
-  lower flood limits.
+  lower flood limits. Export sessions carry a per-account file cap (2GiB, or 4GiB with Telegram
+  Premium; picked up from the premium cache once detected): files above the cap fail fast with
+  `TAKEOUT_FILE_TOO_BIG` surfaced in FAIL lines and the summary.
 - Stable per-account device fingerprint (derived once, persisted, never drifts).
 - Sessions 0600, single-process flock, entity cache persisted (deleted channels: the server no
   longer returns history — your local manifest is the recovery).

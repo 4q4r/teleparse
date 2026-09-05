@@ -51,6 +51,10 @@ type Config struct {
 	// Root is the resolved downloads root; hardlink mode keeps its blob
 	// store under Root/.teleparse/blobs so links never cross filesystems.
 	Root string
+	// FileMaxSize is the active takeout session's per-account file cap in
+	// bytes; items larger than it fail fast without a transfer. Zero means
+	// no takeout session is active (no cap).
+	FileMaxSize int64
 }
 
 // Resolved is the resolver output for one media item: the final path, the
@@ -362,6 +366,18 @@ func (m *Manager) worker(runCtx, bookCtx context.Context, runID string,
 func (m *Manager) processItem(runCtx, bookCtx context.Context, runID string,
 	item store.MediaItem, state *runState,
 ) {
+	// Takeout sessions cap per-file bytes; an oversized item can never
+	// transfer inside this session, so it fails fast without a single
+	// RPC — cheaper than discovering the cap per file.
+	if oversizedForTakeout(m.cfg.FileMaxSize, item.Size) {
+		m.failItem(bookCtx, state, item,
+			fmt.Errorf("%s exceeds the takeout file cap %s: %w",
+				humanBytes(*item.Size), humanBytes(m.cfg.FileMaxSize), ErrFileTooBigForTakeout),
+			takeoutPrecheckAttempts)
+
+		return
+	}
+
 	resolved, err := m.resolve.Resolve(item)
 	if err != nil {
 		m.failItem(bookCtx, state, item, err, m.cfg.RetryMax)
@@ -528,7 +544,7 @@ func (m *Manager) handleFailure(runCtx, bookCtx context.Context, runID string, s
 
 		return true
 	case isFatalTGError(err):
-		m.failItem(bookCtx, state, item, err, m.cfg.RetryMax)
+		m.failItem(bookCtx, state, item, fatalTakeoutReason(err), m.cfg.RetryMax)
 
 		return true
 	default:
@@ -870,20 +886,52 @@ func (m *Manager) sleepBackoff(ctx context.Context, attempt int) error {
 	}
 }
 
+// takeoutErrFileTooBig is the rpc rejection a takeout session returns for
+// files beyond its file_max_size cap (code 403).
+const takeoutErrFileTooBig = "TAKEOUT_FILE_TOO_BIG"
+
+// takeoutPrecheckAttempts records one claiming attempt for items the
+// oversized pre-check rejects: the row stays retryable, so a later
+// non-takeout or premium-cap run can still fetch it.
+const takeoutPrecheckAttempts = 1
+
+// oversizedForTakeout reports whether a manifest size exceeds the active
+// takeout session cap; no session (zero cap) or an unknown size never trips.
+func oversizedForTakeout(fileCap int64, size *int64) bool {
+	if fileCap <= 0 || size == nil {
+		return false
+	}
+
+	return *size > fileCap
+}
+
 // isFatalTGError reports Telegram errors that no retry can fix: the message
-// or its media is gone for good, on the wire or reported by a refetch.
+// or its media is gone for good, on the wire or reported by a refetch, or
+// the file exceeds the takeout session's size cap.
 func isFatalTGError(err error) bool {
 	switch {
 	case tgerr.Is(err, "MESSAGE_ID_INVALID"),
 		tgerr.Is(err, "MESSAGE_DELETED"),
 		tgerr.Is(err, "MEDIA_EMPTY"),
 		tgerr.Is(err, "MEDIA_INVALID"),
+		tgerr.Is(err, takeoutErrFileTooBig),
 		errors.Is(err, ErrMessageGone),
 		errors.Is(err, ErrMediaGone):
 		return true
 	default:
 		return false
 	}
+}
+
+// fatalTakeoutReason maps a takeout size rejection onto the cap sentinel so
+// failure lines name the export cap and the premium escape hatch; other
+// fatal errors keep their raw rpc form.
+func fatalTakeoutReason(err error) error {
+	if tgerr.Is(err, takeoutErrFileTooBig) {
+		return fmt.Errorf("%w: %w", ErrFileTooBigForTakeout, err)
+	}
+
+	return err
 }
 
 // itemKeyOf builds the stable reporter identity of a media row.

@@ -234,19 +234,31 @@ func runAccountSession(
 		takeoutMode, reason := resolveTakeoutModeFor(flags, cfg, specs,
 			func() (int, error) { return tg.DialogCount(ctx, client) })
 
+		// Cache-only premium resolution (no RPC before the session opens):
+		// an unknown answer defaults the export cap to the base 2GiB, and
+		// the cache-populating query later in downloadRun lets following
+		// runs pick up the premium 4GiB cap.
+		premium := tg.NewAccountManager(app.paths.AccountsDir).
+			AccountPremium(ctx, account, nil)
+
 		if takeoutMode && !app.silentMode(cmd) {
 			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s\n", app.errStyle.Dim("takeout: engaged ("+reason+
 				") - export rate limits apply; the export session finishes when the run ends")); err != nil {
 				return fmt.Errorf("print takeout notice: %w", err)
 			}
+
+			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s\n", app.errStyle.Dim(takeoutCapNotice(premium))); err != nil {
+				return fmt.Errorf("print takeout cap notice: %w", err)
+			}
 		}
 
 		runAPI := func(takeoutEnabled bool) error {
-			return withAPI(ctx, client, takeoutEnabled, func(
+			return withAPI(ctx, client, takeoutEnabled, premium.Premium, func(
 				ctx context.Context,
 				api *tgapi.Client,
 			) error {
-				return executeRun(ctx, cmd, app, account, profileName, opts, plan, specs, mode, api, client, takeoutEnabled)
+				return executeRun(ctx, cmd, app, account, profileName, opts, plan, specs, mode, api, client,
+					takeoutEnabled, takeoutFileCap(takeoutEnabled, premium.Premium))
 			}, func(finishErr error) {
 				if app.silentMode(cmd) {
 					return
@@ -284,14 +296,16 @@ func runAccountSession(
 var errTakeoutCallbackNotRun = errors.New("takeout init failed before the run started")
 
 // withAPI runs fn with the raw API client, wrapped in a takeout session
-// when requested so downloads ride the export rate-limit path. Finish-phase
-// failures (e.g. TAKEOUT_REQUIRED after a long run) never fail an
-// otherwise-successful run: the abandoned session simply expires
-// server-side; onFinishWarn (nil-safe) receives the reason.
+// when requested so downloads ride the export rate-limit path; premium
+// selects the session's FileMaxSize cap. Finish-phase failures (e.g.
+// TAKEOUT_REQUIRED after a long run) never fail an otherwise-successful
+// run: the abandoned session simply expires server-side; onFinishWarn
+// (nil-safe) receives the reason.
 func withAPI(
 	ctx context.Context,
 	client *telegram.Client,
 	takeoutMode bool,
+	premium bool,
 	runAPI func(context.Context, *tgapi.Client) error,
 	onFinishWarn func(error),
 ) error {
@@ -301,13 +315,7 @@ func withAPI(
 
 	callbackErr := errTakeoutCallbackNotRun
 
-	err := takeout.Run(ctx, client, takeout.Config{
-		Files:             true,
-		MessageUsers:      true,
-		MessageChats:      true,
-		MessageMegagroups: true,
-		MessageChannels:   true,
-	}, func(ctx context.Context, session *takeout.Client) error {
+	err := takeout.Run(ctx, client, takeoutConfigFor(premium), func(ctx context.Context, session *takeout.Client) error {
 		callbackErr = runAPI(ctx, tgapi.NewClient(session))
 
 		return callbackErr
@@ -337,9 +345,10 @@ func withAPI(
 
 // executeRun walks the resolved scope, records the run, then previews or
 // downloads everything the filters matched; decomposed into helpers below.
+// takeoutCap is the active export session's file cap (zero off takeout).
 func executeRun(ctx context.Context, cmd *cobra.Command, app *App, account, profileName string,
 	opts filters.Options, plan *filters.Plan, specs []string, mode runMode,
-	api *tgapi.Client, client *telegram.Client, takeoutActive bool,
+	api *tgapi.Client, client *telegram.Client, takeoutActive bool, takeoutCap int64,
 ) error {
 	state, err := openStore(app) //nolint:contextcheck // store.Open takes no context
 	if err != nil {
@@ -429,7 +438,7 @@ func executeRun(ctx context.Context, cmd *cobra.Command, app *App, account, prof
 	}
 
 	return downloadRun(ctx, cmd, state, app, runID, account, resolver,
-		collector, targets, opts, api, client, takeoutActive)
+		collector, targets, opts, api, client, takeoutActive, takeoutCap)
 }
 
 // walkCollector accumulates manifest items, walk context and per-chat
@@ -637,7 +646,7 @@ func previewRun(ctx context.Context, cmd *cobra.Command, app *App, state *store.
 
 func downloadRun(ctx context.Context, cmd *cobra.Command, state *store.Store, app *App, runID string,
 	account string, resolver *runResolver, collector *walkCollector, targets []scan.Target,
-	opts filters.Options, api *tgapi.Client, client *telegram.Client, takeoutActive bool,
+	opts filters.Options, api *tgapi.Client, client *telegram.Client, takeoutActive bool, takeoutCap int64,
 ) error {
 	pacer := pace.New(pace.Config{
 		Concurrency:         app.cfg.Pacing.Concurrency,
@@ -692,6 +701,7 @@ func downloadRun(ctx context.Context, cmd *cobra.Command, state *store.Store, ap
 		Dedupe:       opts.Dedupe,
 		SkipExisting: opts.SkipExisting,
 		Root:         app.paths.Downloads,
+		FileMaxSize:  takeoutCap,
 	}, resolver, reporter)
 	mgr.Fetch = download.ParallelFetch(pools, api, download.ParallelOptions{
 		Threads:  threads,
@@ -1254,6 +1264,64 @@ const minAgeProgressChunk = 25
 
 // errTakeoutExclusive rejects combining --takeout with --no-takeout.
 var errTakeoutExclusive = errors.New("--takeout and --no-takeout are mutually exclusive")
+
+// Takeout export sessions carry a per-account file-size cap:
+// account.initTakeoutSession takes it as file_max_size, and omitting it
+// yields a session that allows no file bytes at all, so every download
+// inside the session fails as TAKEOUT_FILE_TOO_BIG. Plain accounts cap at
+// 2GiB, Telegram Premium at 4GiB.
+const (
+	takeoutFileCapBase    int64 = 2 << 30 // 2GiB
+	takeoutFileCapPremium int64 = 4 << 30 // 4GiB
+)
+
+// takeoutCapFor maps the account's premium state onto the session cap.
+func takeoutCapFor(premium bool) int64 {
+	if premium {
+		return takeoutFileCapPremium
+	}
+
+	return takeoutFileCapBase
+}
+
+// takeoutFileCap resolves the cap active for downloads: zero off takeout
+// (no session cap applies), otherwise the account's premium cap.
+func takeoutFileCap(takeoutActive, premium bool) int64 {
+	if !takeoutActive {
+		return 0
+	}
+
+	return takeoutCapFor(premium)
+}
+
+// takeoutConfigFor builds the export session config; FileMaxSize must
+// carry the account cap or the server session allows no file bytes.
+func takeoutConfigFor(premium bool) takeout.Config {
+	return takeout.Config{
+		Files:             true,
+		MessageUsers:      true,
+		MessageChats:      true,
+		MessageMegagroups: true,
+		MessageChannels:   true,
+		FileMaxSize:       takeoutCapFor(premium),
+	}
+}
+
+// takeoutCapNotice renders the cap line shown when a takeout session
+// engages; an unknown premium answer notes the conservative default.
+func takeoutCapNotice(status tg.PremiumStatus) string {
+	if status.Premium {
+		return "takeout file cap: " + humanBytes(takeoutFileCapPremium) + " (premium)"
+	}
+
+	if status.Source == tg.PremiumSourceNone {
+		return "takeout file cap: " + humanBytes(takeoutFileCapBase) +
+			" (premium unknown, base cap; premium raises it to " + humanBytes(takeoutFileCapPremium) + ")"
+	}
+
+	return "takeout file cap: " + humanBytes(takeoutFileCapBase) +
+		" (premium raises it to " + humanBytes(takeoutFileCapPremium) + ")"
+}
 
 // resolveTakeoutModeFor decides whether this run rides a takeout session:
 // explicit flags win, config takeout forces always, otherwise the auto
