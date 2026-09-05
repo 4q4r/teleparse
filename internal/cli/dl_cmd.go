@@ -249,11 +249,7 @@ func executeRun(ctx context.Context, cmd *cobra.Command, app *App, account, prof
 	}
 
 	if minAge > 0 {
-		if err := printLine(cmd, "chat-min-age %s: probing %d chats...\n", opts.ChatMinAge, len(targets)); err != nil {
-			return finishRunE(ctx, state, runID, fmt.Errorf("print min-age status: %w", err))
-		}
-
-		targets, err = scan.FilterByMinAge(ctx, api, targets, minAge)
+		targets, err = filterMinAgeWithProgress(ctx, cmd, app, api, targets, minAge, opts.ChatMinAge)
 		if err != nil {
 			return finishRunE(ctx, state, runID, err)
 		}
@@ -783,3 +779,59 @@ func stringOrNil(text string) *string {
 
 	return &text
 }
+
+// filterMinAgeWithProgress runs the chat-age probe with a live progress
+// line on stderr (single \r-rewritten line on a terminal, one line per
+// chunk otherwise) so large dialog sets never look frozen; stdout stays
+// machine-readable for --format json.
+func filterMinAgeWithProgress(
+	ctx context.Context,
+	cmd *cobra.Command,
+	app *App,
+	api scan.WalkAPI,
+	targets []scan.Target,
+	minAge time.Duration,
+	label string,
+) ([]scan.Target, error) {
+	report := minAgeProgressReporter(cmd, app, label, len(targets))
+
+	kept, err := scan.FilterByMinAge(ctx, api, targets, minAge, report)
+
+	if app != nil && !app.silentMode(cmd) {
+		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "\rchat-min-age %s: probing %d chats... done, kept %d/%d\n",
+			label, len(targets), len(kept), len(targets)); err != nil {
+			return nil, fmt.Errorf("print min-age summary: %w", err)
+		}
+	}
+
+	return kept, err //nolint:wrapcheck // probe errors already carry chat context
+}
+
+// minAgeProgressReporter renders probe progress to stderr: a single
+// rewritten line on terminals, a chunked line otherwise, silent under -s.
+func minAgeProgressReporter(cmd *cobra.Command, app *App, label string, total int) func(done, total int) {
+	if app == nil || app.silentMode(cmd) || total == 0 {
+		return nil
+	}
+
+	tty := term.IsTerminal(int(os.Stderr.Fd()))
+
+	return func(done, all int) {
+		if !tty && done%minAgeProgressChunk != 0 {
+			return
+		}
+
+		line := fmt.Sprintf("chat-min-age %s: probing %d chats... %d/%d", label, all, done, all)
+
+		if _, err := fmt.Fprint(cmd.ErrOrStderr(), "\r"+line); err != nil {
+			return
+		}
+
+		if !tty {
+			_, _ = fmt.Fprint(cmd.ErrOrStderr(), "\n")
+		}
+	}
+}
+
+// minAgeProgressChunk is the non-terminal progress reporting interval.
+const minAgeProgressChunk = 25
