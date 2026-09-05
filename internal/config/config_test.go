@@ -20,7 +20,7 @@ func TestLoadCreatesDefaultAndRoundTrips(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "default", cfg.Auth.Account)
 	assert.Equal(t, 3, cfg.Pacing.Concurrency)
-	assert.Equal(t, "unique-id", cfg.Filters.Dedupe)
+	assert.Equal(t, "hardlink", cfg.Filters.Dedupe)
 	assert.True(t, cfg.Filters.Recursion.Topics)
 	assert.Contains(t, paths.StateDB, "state.db")
 	assert.Contains(t, paths.AccountsDir, "accounts")

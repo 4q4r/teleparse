@@ -141,6 +141,9 @@ func templateTail() string {
 # root = ""
 # Downloads root. Empty (default) uses the XDG data dir
 # (~/.local/share/teleparse/downloads); a leading ~/ is expanded.
+# With filters.dedupe = "hardlink" (the default) the hidden blob store
+# lives under <root>/.teleparse/blobs: keep the root on one filesystem
+# so chat copies can hardlink to their blobs.
 
 # template = "{chat}/{date:%Y-%m}/{filename}"
 # Path template under root. Placeholders: {chat} {sender} {date:YYYY-MM}

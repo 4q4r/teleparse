@@ -671,6 +671,7 @@ func downloadRun(ctx context.Context, cmd *cobra.Command, state *store.Store, ap
 		RetryMax:     app.cfg.Pacing.RetryMax,
 		Dedupe:       opts.Dedupe,
 		SkipExisting: opts.SkipExisting,
+		Root:         app.paths.Downloads,
 	}, resolver, reporter)
 	mgr.Fetch = download.ParallelFetch(pools, api, download.ParallelOptions{
 		Threads:  threads,
@@ -1023,8 +1024,16 @@ func printPlan(cmd *cobra.Command, collector *walkCollector) error {
 		len(collector.items), humanTotalSize(collector), cached)
 }
 
-// printSummary renders the final one-line dl/sync outcome.
+// printSummary renders the final one-line dl/sync outcome; the linked
+// counter appears only when hardlink dedupe served occurrences this run.
 func printSummary(cmd *cobra.Command, res download.Result, took time.Duration) error {
+	if res.Linked > 0 {
+		return printLine(cmd,
+			"downloaded: %d (%s), linked: %d, skipped: %d, failed: %d, retries: %d, took %s\n",
+			res.Downloaded, humanBytes(res.Bytes), res.Linked, res.Skipped, res.Failed, res.Retries,
+			took.Round(time.Second))
+	}
+
 	return printLine(cmd, "downloaded: %d (%s), skipped: %d, failed: %d, retries: %d, took %s\n",
 		res.Downloaded, humanBytes(res.Bytes), res.Skipped, res.Failed, res.Retries, took.Round(time.Second))
 }
