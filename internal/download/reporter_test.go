@@ -5,10 +5,11 @@ import (
 	"errors"
 	"io"
 	"sync"
-	"teleparse/internal/config"
-	"teleparse/internal/download"
-	"teleparse/internal/store"
 	"testing"
+
+	"github.com/4q4r/teleparse/internal/config"
+	"github.com/4q4r/teleparse/internal/download"
+	"github.com/4q4r/teleparse/internal/store"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"teleparse/internal/config"
-	"teleparse/internal/tg"
 	"time"
+
+	"github.com/4q4r/teleparse/internal/config"
+	"github.com/4q4r/teleparse/internal/tg"
 
 	"github.com/spf13/cobra"
 )

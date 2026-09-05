@@ -2,8 +2,9 @@ package tg_test
 
 import (
 	"encoding/hex"
-	"teleparse/internal/tg"
 	"testing"
+
+	"github.com/4q4r/teleparse/internal/tg"
 
 	"github.com/gotd/td/mtproxy"
 	"github.com/stretchr/testify/assert"

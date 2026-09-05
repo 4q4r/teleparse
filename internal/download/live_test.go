@@ -2,9 +2,10 @@ package download_test
 
 import (
 	"bytes"
-	"teleparse/internal/download"
 	"testing"
 	"time"
+
+	"github.com/4q4r/teleparse/internal/download"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

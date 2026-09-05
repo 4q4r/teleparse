@@ -2,9 +2,10 @@ package scan_test
 
 import (
 	"context"
-	"teleparse/internal/filters"
-	"teleparse/internal/scan"
 	"testing"
+
+	"github.com/4q4r/teleparse/internal/filters"
+	"github.com/4q4r/teleparse/internal/scan"
 
 	tg "github.com/gotd/td/tg"
 	"github.com/stretchr/testify/assert"

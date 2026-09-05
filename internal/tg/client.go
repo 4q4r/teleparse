@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"teleparse/internal/config"
 	"time"
+
+	"github.com/4q4r/teleparse/internal/config"
 
 	"golang.org/x/time/rate"
 

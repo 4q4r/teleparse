@@ -4,7 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"teleparse/internal/config"
+
+	"github.com/4q4r/teleparse/internal/config"
 
 	toml "github.com/pelletier/go-toml/v2"
 	"github.com/spf13/cobra"

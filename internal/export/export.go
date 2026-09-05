@@ -8,7 +8,8 @@ import (
 	"fmt"
 	"io"
 	"strconv"
-	"teleparse/internal/store"
+
+	"github.com/4q4r/teleparse/internal/store"
 )
 
 // decimalBase is the strconv base used for integer formatting.

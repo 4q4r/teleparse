@@ -2,9 +2,10 @@ package export_test
 
 import (
 	"bytes"
-	"teleparse/internal/export"
-	"teleparse/internal/store"
 	"testing"
+
+	"github.com/4q4r/teleparse/internal/export"
+	"github.com/4q4r/teleparse/internal/store"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

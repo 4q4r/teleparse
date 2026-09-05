@@ -3,8 +3,9 @@ package tg_test
 import (
 	"os"
 	"path/filepath"
-	"teleparse/internal/tg"
 	"testing"
+
+	"github.com/4q4r/teleparse/internal/tg"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

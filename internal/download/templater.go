@@ -8,9 +8,10 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"teleparse/internal/filters"
 	"time"
 	"unicode/utf8"
+
+	"github.com/4q4r/teleparse/internal/filters"
 )
 
 // Sentinel errors wrapped by dynamic template failures.

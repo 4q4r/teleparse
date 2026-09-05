@@ -1,8 +1,9 @@
 package tg_test
 
 import (
-	"teleparse/internal/tg"
 	"testing"
+
+	"github.com/4q4r/teleparse/internal/tg"
 
 	"github.com/gotd/td/telegram/message/peer"
 	gotdtg "github.com/gotd/td/tg"

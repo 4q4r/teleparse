@@ -3,8 +3,9 @@ package config_test
 import (
 	"os"
 	"path/filepath"
-	"teleparse/internal/config"
 	"testing"
+
+	"github.com/4q4r/teleparse/internal/config"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

@@ -1,4 +1,4 @@
-module teleparse
+module github.com/4q4r/teleparse
 
 go 1.27.0
 

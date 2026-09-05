@@ -10,12 +10,13 @@ import (
 	"os"
 	"path/filepath"
 	"sync/atomic"
-	"teleparse/internal/config"
-	"teleparse/internal/download"
-	"teleparse/internal/pace"
-	"teleparse/internal/store"
 	"testing"
 	"time"
+
+	"github.com/4q4r/teleparse/internal/config"
+	"github.com/4q4r/teleparse/internal/download"
+	"github.com/4q4r/teleparse/internal/pace"
+	"github.com/4q4r/teleparse/internal/store"
 
 	"github.com/gotd/td/tgerr"
 	"github.com/stretchr/testify/assert"

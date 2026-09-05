@@ -3,8 +3,9 @@ package webproxy_test
 import (
 	"encoding/binary"
 	"encoding/hex"
-	"teleparse/internal/webproxy"
 	"testing"
+
+	"github.com/4q4r/teleparse/internal/webproxy"
 
 	"github.com/stretchr/testify/require"
 )

@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"teleparse/internal/filters"
+
+	"github.com/4q4r/teleparse/internal/filters"
 
 	toml "github.com/pelletier/go-toml/v2"
 )

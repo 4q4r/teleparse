@@ -8,9 +8,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
-	"teleparse/internal/webproxy"
 	"testing"
 	"time"
+
+	"github.com/4q4r/teleparse/internal/webproxy"
 
 	"github.com/stretchr/testify/require"
 )

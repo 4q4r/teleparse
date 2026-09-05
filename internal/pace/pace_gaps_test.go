@@ -3,9 +3,10 @@ package pace_test
 import (
 	"context"
 	"sync/atomic"
-	"teleparse/internal/pace"
 	"testing"
 	"time"
+
+	"github.com/4q4r/teleparse/internal/pace"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

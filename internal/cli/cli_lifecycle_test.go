@@ -5,9 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"teleparse/internal/store"
 	"testing"
 	"time"
+
+	"github.com/4q4r/teleparse/internal/store"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

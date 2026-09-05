@@ -4,7 +4,8 @@ import (
 	"fmt"
 	"reflect"
 	"strconv"
-	"teleparse/internal/filters"
+
+	"github.com/4q4r/teleparse/internal/filters"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"

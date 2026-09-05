@@ -3,11 +3,12 @@ package scan_test
 import (
 	"context"
 	"fmt"
-	"teleparse/internal/filters"
-	"teleparse/internal/scan"
-	"teleparse/internal/testutil/tlmock"
 	"testing"
 	"time"
+
+	"github.com/4q4r/teleparse/internal/filters"
+	"github.com/4q4r/teleparse/internal/scan"
+	"github.com/4q4r/teleparse/internal/testutil/tlmock"
 
 	"github.com/gotd/td/bin"
 	"github.com/gotd/td/telegram/message/peer"

@@ -1,9 +1,10 @@
 package tlmock_test
 
 import (
-	"teleparse/internal/testutil/tlmock"
 	"testing"
 	"time"
+
+	"github.com/4q4r/teleparse/internal/testutil/tlmock"
 
 	"github.com/gotd/td/bin"
 	tg "github.com/gotd/td/tg"

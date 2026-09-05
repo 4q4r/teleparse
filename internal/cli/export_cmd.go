@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"teleparse/internal/export"
-	"teleparse/internal/store"
+
+	"github.com/4q4r/teleparse/internal/export"
+	"github.com/4q4r/teleparse/internal/store"
 
 	"github.com/spf13/cobra"
 )

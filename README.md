@@ -49,16 +49,29 @@ curl -fsSL https://github.com/4q4r/teleparse/releases/latest/download/teleparse_
   -o teleparse && chmod +x teleparse && ./teleparse -v
 ```
 
-**From source** (canonical until the module path is published):
+**Via `go install`** (private repo: needs GOPRIVATE + git auth over SSH):
 
 ```bash
-git clone https://github.com/4q4r/teleparse.git && cd teleparse
-make build          # CGO_ENABLED=0 static binary → ./teleparse
+# one-shot, no global git config changes (env-scoped URL rewrite):
+GOPRIVATE=github.com/4q4r/* \
+GIT_CONFIG_COUNT=1 \
+GIT_CONFIG_KEY_0='url.git@github.com:.insteadOf' \
+GIT_CONFIG_VALUE_0='https://github.com/' \
+go install github.com/4q4r/teleparse/cmd/teleparse@latest
 ```
 
-<!-- TODO: once the module path is published (github.com/4q4r/teleparse),
-     replace the clone instructions above with:
-     go install github.com/4q4r/teleparse/cmd/teleparse@latest -->
+Installs into `$(go env GOPATH)/bin` (usually `~/go/bin` — make sure it is on
+`PATH`). Permanent alternative: `git config --global url."git@github.com:".insteadOf "https://github.com/"`
+or `gh auth setup-git` for HTTPS credentials, then plain
+`GOPRIVATE=github.com/4q4r/* go install github.com/4q4r/teleparse/cmd/teleparse@latest`.
+
+**From source** (no network fetch beyond the clone):
+
+```bash
+git clone git@github.com:4q4r/teleparse.git && cd teleparse
+make build          # CGO_ENABLED=0 static binary → ./teleparse
+go install ./cmd/teleparse   # or straight into ~/go/bin
+```
 
 Releases are cut by [GoReleaser](https://goreleaser.com) on every `v*` tag
 (`.github/workflows/release.yml`).
@@ -350,7 +363,7 @@ govulncheck ./...
 go test -race -tags webproxy_integration ./internal/webproxy/...  # needs docker/git
 make cover                # coverage profile + per-function totals (coverage.out)
 make check                # fmt + lint + vet + test + vuln in one shot
-CGO_ENABLED=0 go build -ldflags "-X teleparse/internal/cli.version=$(git describe --tags)" -o teleparse ./cmd/teleparse
+CGO_ENABLED=0 go build -ldflags "-X github.com/4q4r/teleparse/internal/cli.version=$(git describe --tags)" -o teleparse ./cmd/teleparse
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development guide.

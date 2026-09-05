@@ -4,8 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"teleparse/internal/cli"
 	"testing"
+
+	"github.com/4q4r/teleparse/internal/cli"
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"

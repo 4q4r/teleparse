@@ -1,5 +1,5 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -s -w -X teleparse/internal/cli.version=$(VERSION)
+LDFLAGS := -s -w -X github.com/4q4r/teleparse/internal/cli.version=$(VERSION)
 
 .PHONY: build lint fmt vet test cover vuln integration check release-snapshot clean
 

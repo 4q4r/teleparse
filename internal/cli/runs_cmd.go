@@ -4,9 +4,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"teleparse/internal/store"
 	"text/tabwriter"
 	"time"
+
+	"github.com/4q4r/teleparse/internal/store"
 
 	"github.com/spf13/cobra"
 )

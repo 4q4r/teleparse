@@ -8,9 +8,10 @@ import (
 	"io"
 	"net"
 	"strings"
-	"teleparse/internal/tg"
 	"testing"
 	"time"
+
+	"github.com/4q4r/teleparse/internal/tg"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

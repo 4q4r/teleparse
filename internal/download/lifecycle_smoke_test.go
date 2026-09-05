@@ -9,11 +9,12 @@ import (
 	"os"
 	"path/filepath"
 	"sync/atomic"
-	"teleparse/internal/download"
-	"teleparse/internal/filters"
-	"teleparse/internal/store"
 	"testing"
 	"time"
+
+	"github.com/4q4r/teleparse/internal/download"
+	"github.com/4q4r/teleparse/internal/filters"
+	"github.com/4q4r/teleparse/internal/store"
 
 	"github.com/gotd/td/tgerr"
 	"github.com/stretchr/testify/assert"

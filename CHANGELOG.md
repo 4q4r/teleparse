@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-09-05
+
+### Changed
+
+- Module path renamed `teleparse` → `github.com/4q4r/teleparse`: the tool is
+  now installable via
+  `GOPRIVATE=github.com/4q4r/* go install github.com/4q4r/teleparse/cmd/teleparse@latest`
+  (binary lands in `$(go env GOPATH)/bin`).
+
+### Fixed
+
+- Windows release binaries carried a doubled `.exe` suffix.
+
 ## [0.1.0] - 2026-09-05
 
 First public release.

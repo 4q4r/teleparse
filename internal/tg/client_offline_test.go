@@ -4,10 +4,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"teleparse/internal/config"
-	"teleparse/internal/tg"
 	"testing"
 	"time"
+
+	"github.com/4q4r/teleparse/internal/config"
+	"github.com/4q4r/teleparse/internal/tg"
 
 	"github.com/gotd/td/telegram/dcs"
 	"github.com/stretchr/testify/assert"

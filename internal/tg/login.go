@@ -5,7 +5,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"teleparse/internal/config"
+
+	"github.com/4q4r/teleparse/internal/config"
 
 	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"

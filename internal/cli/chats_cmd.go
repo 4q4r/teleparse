@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"teleparse/internal/tg"
+
+	"github.com/4q4r/teleparse/internal/tg"
 
 	"github.com/gotd/td/telegram"
 	"github.com/spf13/cobra"

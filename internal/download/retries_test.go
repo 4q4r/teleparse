@@ -7,8 +7,9 @@ import (
 	"io"
 	"net"
 	"sync/atomic"
-	"teleparse/internal/download"
 	"testing"
+
+	"github.com/4q4r/teleparse/internal/download"
 
 	"github.com/gotd/td/tgerr"
 	"github.com/stretchr/testify/assert"
