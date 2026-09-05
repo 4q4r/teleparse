@@ -3,14 +3,36 @@ package cli
 
 import (
 	"fmt"
+	"runtime/debug"
 
 	"github.com/4q4r/teleparse/internal/config"
 
 	"github.com/spf13/cobra"
 )
 
-// version is set at build time via -ldflags.
+// version is injected at release time via -ldflags; when absent ("dev"),
+// binaries built with `go install pkg@version` fall back to the module
+// version baked into the build info.
 var version = "dev"
+
+// effectiveVersion resolves the runtime version: ldflags value first,
+// then the go-install module version, then "dev".
+func effectiveVersion() string {
+	if version != "dev" {
+		return version
+	}
+
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return version
+	}
+
+	if v := info.Main.Version; v != "" && v != "(devel)" {
+		return v
+	}
+
+	return version
+}
 
 // App carries shared state across commands.
 type App struct {
@@ -55,7 +77,7 @@ func New() *cobra.Command {
 		Long: "teleparse scans chats of your personal Telegram accounts and downloads media\n" +
 			"matching any combination of ~150 filters. Multi-account, proxy-friendly,\n" +
 			"anti-ban paced. Sessions live in ~/.config/teleparse.",
-		Version:       version,
+		Version:       effectiveVersion(),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
