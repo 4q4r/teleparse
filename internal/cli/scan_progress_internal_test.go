@@ -29,9 +29,17 @@ func newTestScanState(total int) (*scanState, *scanClockFake) {
 // walkFake advances the fake clock by took, marking the chat started and
 // then completed like the real walk loop does.
 func walkFake(state *scanState, clock *scanClockFake, title string, matches int, took time.Duration) {
+	walkFakeCached(state, clock, title, matches, 0, took)
+}
+
+// walkFakeCached is walkFake for incrementally walked chats that carry
+// prior-run cached matches alongside this run's fresh ones.
+func walkFakeCached(
+	state *scanState, clock *scanClockFake, title string, matches, cached int, took time.Duration,
+) {
 	state.chatStart(title)
 	clock.advance(took)
-	state.chatDone(title, matches, took)
+	state.chatDone(title, matches, cached, took)
 }
 
 func TestScanStateETAIsMovingAverageTimesRemaining(t *testing.T) {
@@ -120,6 +128,56 @@ func TestScanStateLinesShowSingleTrailEntry(t *testing.T) {
 
 	joined := strings.Join(state.lines(NewStyler(false)), "\n")
 	assert.Contains(t, joined, "+ Only (4)")
+}
+
+func TestScanStateChatDoneSumsCachedIntoSettledLineAndFooter(t *testing.T) {
+	t.Parallel()
+
+	state, clock := newTestScanState(4)
+
+	walkFakeCached(state, clock, "Docs Archive", 8, 120, 2*time.Second)
+
+	joined := strings.Join(state.lines(NewStyler(false)), "\n")
+
+	for _, want := range []string{
+		"+ Docs Archive (128)",
+		"matched 128 files (+120 cached)",
+	} {
+		assert.Contains(t, joined, want)
+	}
+}
+
+// TestScanStateMixedIncrementalAndFullChatsRenderTotals reproduces the
+// misleading-zeros complaint: an incremental chat that matched nothing new
+// still shows its cached manifest matches, while full walks keep counting
+// fresh matches only and the footer splits the cached share out.
+func TestScanStateMixedIncrementalAndFullChatsRenderTotals(t *testing.T) {
+	t.Parallel()
+
+	state, clock := newTestScanState(3)
+
+	walkFakeCached(state, clock, "Docs Archive", 0, 120, time.Second)
+	walkFake(state, clock, "Fresh Chat", 7, time.Second)
+
+	joined := strings.Join(state.lines(NewStyler(false)), "\n")
+
+	assert.Contains(t, joined, "+ Docs Archive (120)", "zero fresh matches must not render as (0)")
+	assert.Contains(t, joined, "+ Fresh Chat (7)")
+	assert.Contains(t, joined, "matched 127 files (+120 cached)")
+}
+
+func TestScanStateFooterDropsCachedSegmentWithoutIncrementalChats(t *testing.T) {
+	t.Parallel()
+
+	state, clock := newTestScanState(4)
+
+	walkFake(state, clock, "News", 5, time.Second)
+
+	joined := strings.Join(state.lines(NewStyler(false)), "\n")
+
+	assert.Contains(t, joined, "+ News (5)")
+	assert.Contains(t, joined, "matched 5 files")
+	assert.NotContains(t, joined, "cached", "full walks carry no cached annotation")
 }
 
 func TestScanStateLinesUnknownETARendersPlaceholder(t *testing.T) {
@@ -221,11 +279,12 @@ func TestScanModelAppliesChatMessages(t *testing.T) {
 
 	model := scanModel{state: state, styler: NewStyler(false)}
 
-	next, _ := model.Update(scanChatMsg{title: "News", matches: 7, took: time.Second})
+	next, _ := model.Update(scanChatMsg{title: "News", matches: 7, cached: 120, took: time.Second})
 
 	view := next.View().Content
 	assert.Contains(t, view, "scanning 1/3")
-	assert.Contains(t, view, "+ News (7)")
+	assert.Contains(t, view, "+ News (127)", "settled lines render fresh plus cached matches")
+	assert.Contains(t, view, "matched 127 files (+120 cached)")
 }
 
 func TestScanModelTickReschedules(t *testing.T) {
@@ -262,7 +321,7 @@ func TestScanProgressNilReceiverIsNoop(t *testing.T) {
 	var progress *scanProgress
 
 	assert.NotPanics(t, func() {
-		progress.chatDone("News", 3, time.Second)
+		progress.chatDone("News", 3, 0, time.Second)
 		progress.close()
 	})
 }
@@ -275,20 +334,25 @@ func TestScanProgressNonTTYWritesLinePerChat(t *testing.T) {
 	// Non-TTY construction: total known, plain line surface.
 	progress := &scanProgress{out: cmd.ErrOrStderr(), total: 254, styler: NewStyler(false)}
 
-	progress.chatDone("News Channel", 37, time.Second)
-	progress.chatDone("Docs", 128, time.Second)
+	// The line surface stays fresh-only: the tables and transition line
+	// that follow carry the cached totals, so the per-chat lines keep
+	// their stable format even for incrementally walked chats.
+	progress.chatDone("News Channel", 37, 120, time.Second)
+	progress.chatDone("Docs", 128, 0, time.Second)
 	progress.close()
 
 	out := stderr.String()
 	assert.Contains(t, out, "scanned 1/254  News Channel: 37 matches\n")
 	assert.Contains(t, out, "scanned 2/254  Docs: 128 matches\n")
+	assert.NotContains(t, out, "cached")
 }
 
 func TestScanProgressWalkLoopCallbackDeltas(t *testing.T) {
 	t.Parallel()
 
 	// Mirrors the executeRun wiring: matches per chat come from the
-	// collector length delta around each walk.
+	// collector length delta around each walk, cached from the
+	// incremental stash resolveWalkWindow filled.
 	cmd, stderr := newErrCmd()
 
 	progress := &scanProgress{out: cmd.ErrOrStderr(), total: 3, styler: NewStyler(false)}
@@ -309,7 +373,8 @@ func TestScanProgressWalkLoopCallbackDeltas(t *testing.T) {
 			collector.items = append(collector.items, storeMediaItem())
 		}
 
-		progress.chatDone(target.title, len(collector.items)-before, time.Second)
+		progress.chatDone(target.title, len(collector.items)-before,
+			int(collector.cached[1]), time.Second)
 	}
 
 	assert.Equal(t, "scanned 1/3  A: 2 matches\nscanned 2/3  B: 0 matches\nscanned 3/3  C: 5 matches\n", stderr.String())

@@ -253,6 +253,46 @@ func TestWalkTargetStashesCachedMatchedCount(t *testing.T) {
 	assert.Equal(t, int64(3), collector.cached[30], "prior-run manifest rows are stashed for count totals")
 }
 
+// TestWalkLoopFeedsCachedMatchesIntoChatDone pins the executeRun wiring:
+// the settled progress line for an incrementally walked chat receives the
+// fresh delta plus the stashed cached count, so a chat whose files all
+// came from earlier runs renders their total instead of a misleading (0).
+func TestWalkLoopFeedsCachedMatchesIntoChatDone(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	state, collector := newWalkFixture(t, 500)
+
+	for id := int64(1); id <= 3; id++ {
+		item := store.MediaItem{
+			ChatID: 30, MessageID: id, MediaClass: "photo", MediaID: id,
+			Status: store.StatusDone,
+		}
+		require.NoError(t, func() error { _, err := state.UpsertMedia(ctx, &item); return err }())
+	}
+
+	api := &fakeHistoryAPI{}
+	target := walkTestTarget(30, 900)
+
+	model := scanModel{state: newScanState(timeNow, 1, false), styler: NewStyler(false)}
+
+	// The exact per-chat emission executeRun performs after walkTarget.
+	before := len(collector.items)
+
+	require.NoError(t, walkTarget(ctx, state, api, target,
+		&filters.Plan{}, filters.Options{}, runMode{incremental: true}, collector, nil))
+
+	model.Update(scanChatMsg{
+		title:   chatLabel(target.Chat.ID, target.Chat.Title),
+		matches: len(collector.items) - before,
+		cached:  int(collector.cached[target.Chat.ID]),
+		took:    time.Second,
+	})
+
+	assert.Contains(t, model.View().Content, "+ News (3)",
+		"a zero-fresh incremental chat must render its cached matches")
+}
+
 func TestAdvanceWalkedWatermarksMovesAllSeenChats(t *testing.T) {
 	t.Parallel()
 

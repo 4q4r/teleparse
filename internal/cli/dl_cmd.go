@@ -409,7 +409,11 @@ func executeRun(ctx context.Context, cmd *cobra.Command, app *App, account, prof
 			return finishRunE(ctx, state, runID, err)
 		}
 
-		progress.chatDone(chatLabel(target.Chat.ID, target.Chat.Title), len(collector.items)-before, time.Since(began))
+		// The settled line shows new+cached: incremental walks carry the
+		// prior-run manifest count resolveWalkWindow stashed, so a chat
+		// whose matches all came from earlier runs never renders (0).
+		progress.chatDone(chatLabel(target.Chat.ID, target.Chat.Title),
+			len(collector.items)-before, int(collector.cached[target.Chat.ID]), time.Since(began))
 	}
 
 	progress.close()
