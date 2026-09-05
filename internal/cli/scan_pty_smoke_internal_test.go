@@ -41,7 +41,7 @@ func TestScanProgressPTYSmoke(t *testing.T) {
 	model := scanModel{state: state, styler: styler}
 
 	// First frame: one chat done, ETA already meaningful.
-	model.Update(scanChatMsg{title: "News Channel", matches: 37, took: 2 * time.Second})
+	model.Update(scanChatMsg{title: "News Channel", matches: 37, cached: 96, took: 2 * time.Second})
 
 	first := model.View().Content
 
