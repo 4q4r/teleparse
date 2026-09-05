@@ -118,6 +118,11 @@ func clientNotes(opts *Options) []string {
 		notes = append(notes, "chat-deleted: group and channel peers never count as deleted")
 	}
 
+	if opts.ChatMinAge != "" {
+		notes = append(notes, "client: chat-min-age "+opts.ChatMinAge+
+			" (chats without messages older than the cutoff are skipped before the walk)")
+	}
+
 	if opts.SenderNonContacts || opts.SenderNonMutual {
 		notes = append(notes, "sender-non-*: messages without a sender (anonymous channel posts) never match")
 	}

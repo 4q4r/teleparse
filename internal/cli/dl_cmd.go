@@ -243,6 +243,22 @@ func executeRun(ctx context.Context, cmd *cobra.Command, app *App, account, prof
 		return finishRunE(ctx, state, runID, err)
 	}
 
+	minAge, err := scan.MinAgeFromOptions(opts)
+	if err != nil {
+		return finishRunE(ctx, state, runID, err)
+	}
+
+	if minAge > 0 {
+		if err := printLine(cmd, "chat-min-age %s: probing %d chats...\n", opts.ChatMinAge, len(targets)); err != nil {
+			return finishRunE(ctx, state, runID, fmt.Errorf("print min-age status: %w", err))
+		}
+
+		targets, err = scan.FilterByMinAge(ctx, api, targets, minAge)
+		if err != nil {
+			return finishRunE(ctx, state, runID, err)
+		}
+	}
+
 	resolver, collector := newRunResolver(app, api)
 
 	for _, target := range targets {
