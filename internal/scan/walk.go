@@ -397,10 +397,11 @@ func (q feedQuery) Query(ctx context.Context, req messages.Request) (tg.Messages
 	}
 }
 
-// HistoryFeeds returns the production feed factory over the raw API.
+// HistoryFeeds returns the production feed factory over the raw API; every
+// page fetch retries transient server errors (RPC_CALL_FAIL, 5xx).
 func HistoryFeeds(api WalkAPI) FeedFactory {
 	return func(req FeedRequest) *messages.Iterator {
-		return messages.NewIterator(feedQuery{api: api, req: req}, walkBatchSize)
+		return messages.NewIterator(retryingQuery{inner: feedQuery{api: api, req: req}}, walkBatchSize)
 	}
 }
 
