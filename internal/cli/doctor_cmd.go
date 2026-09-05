@@ -77,7 +77,7 @@ func doctorCmd(app *App) *cobra.Command {
 				result := check()
 
 				if result.skip != "" {
-					if err := printLine(cmd, "SKIP %s: %s\n", result.name, result.skip); err != nil {
+					if err := printLine(cmd, "%s %s: %s\n", doctorBadge(app.style, "SKIP"), result.name, result.skip); err != nil {
 						return fail(cmd, err)
 					}
 
@@ -87,12 +87,12 @@ func doctorCmd(app *App) *cobra.Command {
 				if result.err != nil {
 					failed++
 
-					if err := printLine(cmd, "FAIL %s: %v\n", result.name, result.err); err != nil {
+					if err := printLine(cmd, "%s %s: %v\n", doctorBadge(app.style, "FAIL"), result.name, result.err); err != nil {
 						return fail(cmd, err)
 					}
 
 					if result.hint != "" {
-						if err := printLine(cmd, "     fix: %s\n", result.hint); err != nil {
+						if err := printLine(cmd, "      %s %s\n", app.style.Warning("fix:"), result.hint); err != nil {
 							return fail(cmd, err)
 						}
 					}
@@ -100,12 +100,12 @@ func doctorCmd(app *App) *cobra.Command {
 					continue
 				}
 
-				if err := printLine(cmd, "PASS %s\n", result.name); err != nil {
+				if err := printLine(cmd, "%s %s\n", doctorBadge(app.style, "PASS"), result.name); err != nil {
 					return fail(cmd, err)
 				}
 
 				if result.note != "" {
-					if err := printLine(cmd, "     note: %s\n", result.note); err != nil {
+					if err := printLine(cmd, "      %s %s\n", app.style.Dim("note:"), result.note); err != nil {
 						return fail(cmd, err)
 					}
 				}
@@ -151,14 +151,16 @@ func checkPing(proxyURL, source string) doctorCheck {
 }
 
 func checkAPICreds() doctorCheck {
-	if _, _, err := tg.CredsFromEnv(); err != nil {
+	_, _, source, err := config.Credentials()
+	if err != nil {
 		return doctorCheck{
 			name: "api credentials", err: err,
-			hint: "export TELEPARSE_API_ID=... TELEPARSE_API_HASH=... (create them at https://my.telegram.org)",
+			hint: "export TELEPARSE_API_ID and TELEPARSE_API_HASH, or run teleparse auth login\n" +
+				"once to save them (create the pair at https://my.telegram.org)",
 		}
 	}
 
-	return doctorCheck{name: "api credentials"}
+	return doctorCheck{name: "api credentials", note: "source: " + source}
 }
 
 func checkWritable(name, dir string) doctorCheck {

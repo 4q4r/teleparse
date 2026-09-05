@@ -157,11 +157,16 @@ func runDownloadCommand(app *App, cmd *cobra.Command, specs []string, filterSet 
 		}
 	}
 
+	creds, err := app.resolveCreds()
+	if err != nil {
+		return fail(cmd, err)
+	}
+
 	for _, account := range accounts {
 		cfg := *app.cfg
 		cfg.Auth.Account = account
 
-		runErr := tg.Run(cmd.Context(), account, &cfg, app.paths, func(
+		runErr := tg.Run(cmd.Context(), account, creds, &cfg, app.paths, func(
 			ctx context.Context,
 			client *telegram.Client,
 		) error {

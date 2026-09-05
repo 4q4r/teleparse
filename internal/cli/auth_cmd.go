@@ -139,44 +139,26 @@ func authLoginCmd(app *App) *cobra.Command {
 				return fail(cmd, errQRExclusive)
 			}
 
-			plan, err := resolveLoginMethod(useQR, phone, importPath, tdataDir,
+			creds, err := resolveCredsInteractive(
+				term.IsTerminal(int(os.Stdin.Fd())),
+				notifyingPrompter{newStdPrompter()},
+			)
+			if err != nil {
+				return fail(cmd, err)
+			}
+
+			plan, err := resolveLoginMethod(loginMenuText(app.style), useQR, phone, importPath, tdataDir,
 				term.IsTerminal(int(os.Stdin.Fd())), newStdPrompter().Line)
 			if err != nil {
 				return fail(cmd, err)
 			}
 
-			if plan.TDataDir != "" {
-				storage, err := tg.NewAccountManager(app.paths.AccountsDir).Storage(account)
-				if err != nil {
-					return fail(cmd, err)
-				}
-
-				if err := tg.TDesktopSessionImport(cmd.Context(), plan.TDataDir, newStdPrompter(), storage); err != nil {
-					return fail(cmd, err)
-				}
-
-				if err := printLine(cmd, "imported tdata session for account %s\n", account); err != nil {
-					return fail(cmd, err)
-				}
-			}
-
-			if plan.TelethonPath != "" {
-				storage, err := tg.NewAccountManager(app.paths.AccountsDir).Storage(account)
-				if err != nil {
-					return fail(cmd, err)
-				}
-
-				if err := tg.TelethonSessionImport(cmd.Context(), plan.TelethonPath, storage); err != nil {
-					return fail(cmd, err)
-				}
-
-				if err := printLine(cmd, "imported telethon session for account %s\n", account); err != nil {
-					return fail(cmd, err)
-				}
+			if err := runSessionImports(app, cmd, account, plan); err != nil {
+				return err
 			}
 
 			if plan.QR {
-				info, err := tg.QRLogin(cmd.Context(), account, tg.QROptions{
+				info, err := tg.QRLogin(cmd.Context(), account, creds, tg.QROptions{
 					Timeout: qrTimeout,
 					ASCII:   app.noASCII,
 					TTY:     term.IsTerminal(int(os.Stderr.Fd())),
@@ -186,15 +168,15 @@ func authLoginCmd(app *App) *cobra.Command {
 					return fail(cmd, err)
 				}
 
-				return printLine(cmd, "account %s is logged in via QR (user %d, %s)\n",
-					account, info.ID, strings.TrimSpace(info.FirstName+" "+info.LastName))
+				return printLine(cmd, "%s account %s is logged in via QR (user %d, %s)\n",
+					app.style.Success("+"), account, info.ID, strings.TrimSpace(info.FirstName+" "+info.LastName))
 			}
 
-			if err := tg.Login(cmd.Context(), account, plan.Phone, newStdPrompter(), app.cfg, app.paths); err != nil {
+			if err := tg.Login(cmd.Context(), account, creds, plan.Phone, newStdPrompter(), app.cfg, app.paths); err != nil {
 				return fail(cmd, err)
 			}
 
-			return printLine(cmd, "account %s is logged in\n", account)
+			return printLine(cmd, "%s account %s is logged in\n", app.style.Success("+"), account)
 		},
 	}
 	cmd.Flags().StringVar(&phone, "phone", "", "phone number in +E.164 format (asked interactively when empty)")
@@ -208,6 +190,44 @@ func authLoginCmd(app *App) *cobra.Command {
 	return cmd
 }
 
+// runSessionImports executes the tdata and Telethon imports requested by
+// the login plan, reporting each with a success line.
+func runSessionImports(app *App, cmd *cobra.Command, account string, plan loginPlan) error {
+	if plan.TDataDir != "" {
+		storage, err := tg.NewAccountManager(app.paths.AccountsDir).Storage(account)
+		if err != nil {
+			return fail(cmd, err)
+		}
+
+		if err := tg.TDesktopSessionImport(cmd.Context(), plan.TDataDir, newStdPrompter(), storage); err != nil {
+			return fail(cmd, err)
+		}
+
+		if err := printLine(cmd, "%s imported tdata session for account %s\n",
+			app.style.Success("+"), account); err != nil {
+			return fail(cmd, err)
+		}
+	}
+
+	if plan.TelethonPath != "" {
+		storage, err := tg.NewAccountManager(app.paths.AccountsDir).Storage(account)
+		if err != nil {
+			return fail(cmd, err)
+		}
+
+		if err := tg.TelethonSessionImport(cmd.Context(), plan.TelethonPath, storage); err != nil {
+			return fail(cmd, err)
+		}
+
+		if err := printLine(cmd, "%s imported telethon session for account %s\n",
+			app.style.Success("+"), account); err != nil {
+			return fail(cmd, err)
+		}
+	}
+
+	return nil
+}
+
 func authLogoutCmd(app *App) *cobra.Command {
 	return &cobra.Command{
 		Use:     "logout",
@@ -216,11 +236,16 @@ func authLogoutCmd(app *App) *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			account := app.cfg.Auth.Account
 
-			if err := tg.Logout(cmd.Context(), account, app.cfg, app.paths); err != nil {
+			creds, err := app.resolveCreds()
+			if err != nil {
 				return fail(cmd, err)
 			}
 
-			return printLine(cmd, "account %s logged out\n", account)
+			if err := tg.Logout(cmd.Context(), account, creds, app.cfg, app.paths); err != nil {
+				return fail(cmd, err)
+			}
+
+			return printLine(cmd, "%s account %s logged out\n", app.style.Success("+"), account)
 		},
 	}
 }
@@ -233,6 +258,11 @@ func authStatusCmd(app *App) *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			account := app.cfg.Auth.Account
 
+			creds, err := app.resolveCreds()
+			if err != nil {
+				return fail(cmd, err)
+			}
+
 			manager := tg.NewAccountManager(app.paths.AccountsDir)
 
 			storage, err := manager.Storage(account)
@@ -240,7 +270,7 @@ func authStatusCmd(app *App) *cobra.Command {
 				return fail(cmd, err)
 			}
 
-			err = tg.Run(cmd.Context(), account, app.cfg, app.paths, func(
+			err = tg.Run(cmd.Context(), account, creds, app.cfg, app.paths, func(
 				ctx context.Context,
 				client *telegram.Client,
 			) error {

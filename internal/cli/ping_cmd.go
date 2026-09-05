@@ -90,9 +90,14 @@ func pingCmd(app *App) *cobra.Command {
 				return fail(cmd, err)
 			}
 
+			creds, err := app.resolveCreds()
+			if err != nil {
+				return fail(cmd, err)
+			}
+
 			var probes []dcProbe
 
-			runErr := tg.Run(cmd.Context(), app.cfg.Auth.Account, app.cfg, app.paths, func(
+			runErr := tg.Run(cmd.Context(), app.cfg.Auth.Account, creds, app.cfg, app.paths, func(
 				ctx context.Context,
 				client *telegram.Client,
 			) error {

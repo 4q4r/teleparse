@@ -3,11 +3,13 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"runtime/debug"
 
 	"github.com/4q4r/teleparse/internal/config"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 // version is injected at release time via -ldflags; when absent ("dev"),
@@ -40,6 +42,8 @@ type App struct {
 	paths   *config.Paths
 	format  OutputFormat
 	noASCII bool
+	style   Styler
+	root    *cobra.Command
 }
 
 // outputFormat reports the effective --format value (validated once in
@@ -70,6 +74,32 @@ func (a *App) silentMode(cmd *cobra.Command) bool {
 
 // New builds the root command.
 func New() *cobra.Command {
+	return newApp().root
+}
+
+// Execute runs the root command, prints failures with a styled error prefix
+// and returns the process exit code. It exists so main.go never formats
+// errors itself: the Styler lives on the App, enabled by flag parsing.
+func Execute() int {
+	app := newApp()
+
+	if err := app.root.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, app.style.ErrorPrefix(), err)
+
+		return exitFailure
+	}
+
+	return exitSuccess
+}
+
+// Process exit codes returned by Execute.
+const (
+	exitSuccess = 0
+	exitFailure = 1
+)
+
+// newApp builds the shared App with its root command tree.
+func newApp() *App {
 	app := &App{}
 	root := &cobra.Command{
 		Use:   "teleparse",
@@ -105,6 +135,15 @@ func New() *cobra.Command {
 			app.cfg, app.paths = cfg, paths
 			app.format = format
 			app.noASCII, _ = cmd.Flags().GetBool("no-ascii")
+
+			noColor, _ := cmd.Flags().GetBool("no-color")
+			app.style = NewStyler(StyleOptions{
+				NoColorFlag: noColor,
+				NoASCIIFlag: app.noASCII,
+				NoColorEnv:  os.Getenv("NO_COLOR") != "",
+				IsTTY:       term.IsTerminal(int(os.Stdout.Fd())),
+			}.Enabled())
+
 			return nil
 		},
 	}
@@ -120,7 +159,10 @@ func New() *cobra.Command {
 		"output format for chats list, runs list|show, stats, proxy show|test,\nping and auth list: table | json | plain")
 	root.PersistentFlags().Bool("no-ascii", false,
 		"plain ASCII output: line-per-item progress instead of the live redraw UI,\n"+
-			"ASCII-only tables and bars")
+			"ASCII-only tables and bars (also disables colors)")
+	root.PersistentFlags().Bool("no-color", false,
+		"disable colored output (also disabled by --no-ascii, the NO_COLOR\n"+
+			"environment variable and non-terminal stdout)")
 
 	root.AddCommand(
 		authCmd(app),
@@ -138,7 +180,9 @@ func New() *cobra.Command {
 		doctorCmd(app),
 	)
 
-	return root
+	app.root = root
+
+	return app
 }
 
 // addFilterFlags registers every filters.Options field as a flag on cmd
