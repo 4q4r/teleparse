@@ -139,13 +139,19 @@ func authLoginCmd(app *App) *cobra.Command {
 				return fail(cmd, errQRExclusive)
 			}
 
-			if tdataDir != "" {
+			plan, err := resolveLoginMethod(useQR, phone, importPath, tdataDir,
+				term.IsTerminal(int(os.Stdin.Fd())), newStdPrompter().Line)
+			if err != nil {
+				return fail(cmd, err)
+			}
+
+			if plan.TDataDir != "" {
 				storage, err := tg.NewAccountManager(app.paths.AccountsDir).Storage(account)
 				if err != nil {
 					return fail(cmd, err)
 				}
 
-				if err := tg.TDesktopSessionImport(cmd.Context(), tdataDir, newStdPrompter(), storage); err != nil {
+				if err := tg.TDesktopSessionImport(cmd.Context(), plan.TDataDir, newStdPrompter(), storage); err != nil {
 					return fail(cmd, err)
 				}
 
@@ -154,13 +160,13 @@ func authLoginCmd(app *App) *cobra.Command {
 				}
 			}
 
-			if importPath != "" {
+			if plan.TelethonPath != "" {
 				storage, err := tg.NewAccountManager(app.paths.AccountsDir).Storage(account)
 				if err != nil {
 					return fail(cmd, err)
 				}
 
-				if err := tg.TelethonSessionImport(cmd.Context(), importPath, storage); err != nil {
+				if err := tg.TelethonSessionImport(cmd.Context(), plan.TelethonPath, storage); err != nil {
 					return fail(cmd, err)
 				}
 
@@ -169,7 +175,7 @@ func authLoginCmd(app *App) *cobra.Command {
 				}
 			}
 
-			if useQR {
+			if plan.QR {
 				info, err := tg.QRLogin(cmd.Context(), account, tg.QROptions{
 					Timeout: qrTimeout,
 					ASCII:   app.noASCII,
@@ -184,7 +190,7 @@ func authLoginCmd(app *App) *cobra.Command {
 					account, info.ID, strings.TrimSpace(info.FirstName+" "+info.LastName))
 			}
 
-			if err := tg.Login(cmd.Context(), account, phone, newStdPrompter(), app.cfg, app.paths); err != nil {
+			if err := tg.Login(cmd.Context(), account, plan.Phone, newStdPrompter(), app.cfg, app.paths); err != nil {
 				return fail(cmd, err)
 			}
 
