@@ -2,6 +2,7 @@ package scan_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -34,9 +35,11 @@ func TestMinAgeFromOptions(t *testing.T) {
 }
 
 // ageProbeAPI answers the offset-bounded probe per user id: even ids have
-// pre-cutoff history, odd ids do not.
+// pre-cutoff history, odd ids do not. The probe log is mutex-guarded
+// because FilterByMinAge probes on parallel workers.
 type ageProbeAPI struct {
 	fakeWalkAPI
+	mu     sync.Mutex
 	probes []*tg.MessagesGetHistoryRequest
 }
 
@@ -44,7 +47,9 @@ type ageProbeAPI struct {
 func (f *ageProbeAPI) MessagesGetHistory(
 	ctx context.Context, request *tg.MessagesGetHistoryRequest,
 ) (tg.MessagesMessagesClass, error) {
+	f.mu.Lock()
 	f.probes = append(f.probes, request)
+	f.mu.Unlock()
 
 	user, _ := request.Peer.(*tg.InputPeerUser)
 
@@ -69,11 +74,16 @@ func TestFilterByMinAge(t *testing.T) {
 		{InputPeer: &tg.InputPeerUser{UserID: 4}, Chat: filters.Chat{ID: 4}},
 	}
 
+	// The progress closure runs on the probe workers, so the call log
+	// needs its own guard.
+	progressMu := sync.Mutex{}
 	var progressCalls []int
 
 	kept, err := scan.FilterByMinAge(context.Background(), api, targets, 24*time.Hour,
 		func(done, total int) {
+			progressMu.Lock()
 			progressCalls = append(progressCalls, done)
+			progressMu.Unlock()
 		})
 	require.NoError(t, err)
 	require.Len(t, kept, 2)

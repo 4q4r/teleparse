@@ -40,7 +40,8 @@ func runConnectivityCheck(cmd *cobra.Command, app *App) error {
 		via = "direct"
 	}
 
-	line := fmt.Sprintf("connection: OK (dc2, %dms, %s)\n", latency.Milliseconds(), via)
+	line := fmt.Sprintf("%s %s (dc2, %dms, %s)\n",
+		app.errStyle.Dim("connection:"), app.errStyle.Success("OK"), latency.Milliseconds(), via)
 
 	if _, err := fmt.Fprint(cmd.ErrOrStderr(), line); err != nil {
 		return fmt.Errorf("print connection status: %w", err)
