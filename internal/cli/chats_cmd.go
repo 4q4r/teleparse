@@ -49,6 +49,10 @@ func chatsListCmd(app *App) *cobra.Command {
 				wanted[strings.TrimSpace(chatType)] = true
 			}
 
+			if err := runConnectivityCheck(cmd, app); err != nil {
+				return fail(cmd, err)
+			}
+
 			err = tg.Run(cmd.Context(), app.cfg.Auth.Account, creds, app.cfg, app.paths, func(
 				ctx context.Context,
 				client *telegram.Client,
@@ -98,6 +102,10 @@ func chatsShowCmd(app *App) *cobra.Command {
 				return showSavedMessages(cmd, app, creds)
 			}
 
+			if err := runConnectivityCheck(cmd, app); err != nil {
+				return fail(cmd, err)
+			}
+
 			err = tg.Run(cmd.Context(), app.cfg.Auth.Account, creds, app.cfg, app.paths, func(
 				ctx context.Context,
 				client *telegram.Client,
@@ -129,6 +137,10 @@ func showSavedMessages(cmd *cobra.Command, app *App, creds tg.Creds) error {
 
 	storage, err := manager.Storage(app.cfg.Auth.Account)
 	if err != nil {
+		return fail(cmd, err)
+	}
+
+	if err := runConnectivityCheck(cmd, app); err != nil {
 		return fail(cmd, err)
 	}
 

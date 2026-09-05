@@ -17,9 +17,6 @@ import (
 	"golang.org/x/term"
 )
 
-// errUnreachable marks a failed pre-login connectivity probe.
-var errUnreachable = errors.New("cannot reach Telegram — check network or proxy settings (net.proxy, TELEPARSE_PROXY)")
-
 // errNotAuthorized marks a missing session without aborting other output.
 var errNotAuthorized = errors.New("account is not logged in")
 
@@ -284,6 +281,10 @@ func authStatusCmd(app *App) *cobra.Command {
 				return fail(cmd, err)
 			}
 
+			if err := runConnectivityCheck(cmd, app); err != nil {
+				return fail(cmd, err)
+			}
+
 			manager := tg.NewAccountManager(app.paths.AccountsDir)
 
 			storage, err := manager.Storage(account)
@@ -428,27 +429,4 @@ func authExportCmd(app *App) *cobra.Command {
 			return nil
 		},
 	}
-}
-
-// connectivityProbeTimeout bounds the pre-login connection check.
-const connectivityProbeTimeout = 6 * time.Second
-
-// runConnectivityCheck always runs before any login interaction: it proves
-// the network path to Telegram (through the effective proxy) so problems
-// surface before the user types anything.
-func runConnectivityCheck(cmd *cobra.Command, app *App) error {
-	probeCtx, cancel := context.WithTimeout(cmd.Context(), connectivityProbeTimeout)
-	defer cancel()
-
-	latency, err := tg.ProbeProxy(probeCtx, app.cfg.Net.Proxy)
-	if err != nil {
-		return fmt.Errorf("connection check failed: %w: %w", err, errUnreachable)
-	}
-
-	via := app.cfg.Net.ProxySource
-	if via == "" {
-		via = "direct"
-	}
-
-	return printLine(cmd, "connection: OK (dc%d, %dms, %s)\n", 2, latency.Milliseconds(), via)
 }
