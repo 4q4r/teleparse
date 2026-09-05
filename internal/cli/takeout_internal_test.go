@@ -1,9 +1,12 @@
 package cli
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/4q4r/teleparse/internal/config"
+
+	"github.com/gotd/td/tgerr"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -111,3 +114,37 @@ func probeErr() (int, error) { return 0, assert.AnError }
 
 // probeNone marks an unused probe (flag/config branches never call it).
 func probeNone() (int, error) { return -1, nil }
+
+func TestTakeoutFallback(t *testing.T) {
+	t.Parallel()
+
+	delayErr := fmt.Errorf("init takeout session: %w",
+		tgerr.New(420, "TAKEOUT_INIT_DELAY_86400"))
+
+	// Auto-engaged takeout falls back with a notice.
+	retry, notice := takeoutFallback(true, "auto: ~1095 chats >= 50", delayErr)
+	require.True(t, retry)
+	assert.Contains(t, notice, "continuing without export mode")
+	assert.Contains(t, notice, "24h00m")
+
+	// Forced takeout never silently falls back.
+	retry, _ = takeoutFallback(false, "forced by --takeout", delayErr)
+	assert.False(t, retry)
+
+	// Non-takeout errors never trigger a fallback.
+	retry, _ = takeoutFallback(true, "auto", assert.AnError)
+	assert.False(t, retry)
+
+	retry, _ = takeoutFallback(true, "auto", nil)
+	assert.False(t, retry)
+}
+
+func TestIsTakeoutInitFailure(t *testing.T) {
+	t.Parallel()
+
+	require.True(t, isTakeoutInitFailure(tgerr.New(420, "TAKEOUT_INIT_DELAY_3600")))
+	require.True(t, isTakeoutInitFailure(fmt.Errorf("outer: %w",
+		tgerr.New(420, "TAKEOUT_SESSION_TOO_MANY"))))
+	assert.False(t, isTakeoutInitFailure(assert.AnError))
+	assert.False(t, isTakeoutInitFailure(nil))
+}

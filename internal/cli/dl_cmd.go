@@ -181,22 +181,7 @@ func runDownloadCommand(app *App, cmd *cobra.Command, specs []string, filterSet 
 			ctx context.Context,
 			client *telegram.Client,
 		) error {
-			takeoutMode, reason := resolveTakeoutModeFor(flags, &cfg, specs,
-				func() (int, error) { return tg.DialogCount(ctx, client) })
-
-			if takeoutMode && !app.silentMode(cmd) {
-				if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s\n", app.errStyle.Dim("takeout: engaged ("+reason+
-					") - export rate limits apply; the export session finishes when the run ends")); err != nil {
-					return fmt.Errorf("print takeout notice: %w", err)
-				}
-			}
-
-			return withAPI(ctx, client, takeoutMode, func(
-				ctx context.Context,
-				api *tgapi.Client,
-			) error {
-				return executeRun(ctx, cmd, app, account, profileName, opts, plan, specs, mode, api, client)
-			})
+			return runAccountSession(ctx, cmd, app, account, profileName, opts, plan, specs, mode, client, &cfg, flags)
 		})
 		if runErr != nil {
 			return fail(cmd, runErr)
@@ -204,6 +189,61 @@ func runDownloadCommand(app *App, cmd *cobra.Command, specs []string, filterSet 
 	}
 
 	return nil
+}
+
+// runAccountSession wraps one connected client session: takeout decision,
+// engagement notice and the fail-soft fallback to the plain API when an
+// AUTO-engaged takeout session cannot start.
+func runAccountSession(
+	ctx context.Context,
+	cmd *cobra.Command,
+	app *App,
+	account, profileName string,
+	opts filters.Options,
+	plan *filters.Plan,
+	specs []string,
+	mode runMode,
+	client *telegram.Client,
+	cfg *config.Config,
+	flags dlRunFlags,
+) error {
+	{
+		takeoutMode, reason := resolveTakeoutModeFor(flags, cfg, specs,
+			func() (int, error) { return tg.DialogCount(ctx, client) })
+
+		if takeoutMode && !app.silentMode(cmd) {
+			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s\n", app.errStyle.Dim("takeout: engaged ("+reason+
+				") - export rate limits apply; the export session finishes when the run ends")); err != nil {
+				return fmt.Errorf("print takeout notice: %w", err)
+			}
+		}
+
+		runAPI := func(takeoutEnabled bool) error {
+			return withAPI(ctx, client, takeoutEnabled, func(
+				ctx context.Context,
+				api *tgapi.Client,
+			) error {
+				return executeRun(ctx, cmd, app, account, profileName, opts, plan, specs, mode, api, client)
+			})
+		}
+
+		runErr := runAPI(takeoutMode)
+		if retry, notice := takeoutFallback(!takeoutMode, reason, runErr); retry {
+			if !app.silentMode(cmd) {
+				if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s\n", app.errStyle.Warning(notice)); err != nil {
+					return fmt.Errorf("print takeout fallback notice: %w", err)
+				}
+			}
+
+			return runAPI(false)
+		}
+
+		if runErr != nil && isTakeoutInitFailure(runErr) {
+			return fmt.Errorf("%w: %w", ErrTakeoutInitUnavailable, runErr)
+		}
+
+		return runErr
+	}
 }
 
 // withAPI runs fn with the raw API client, wrapped in a takeout session
