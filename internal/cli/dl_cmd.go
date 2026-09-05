@@ -282,6 +282,8 @@ func executeRun(ctx context.Context, cmd *cobra.Command, app *App, account, prof
 
 		before, began := len(collector.items), time.Now()
 
+		progress.chatStart(target.Chat.Title)
+
 		if err := walkTarget(ctx, state, api, target, plan, opts, mode, collector); err != nil {
 			progress.close()
 

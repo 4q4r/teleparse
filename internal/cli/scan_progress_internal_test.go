@@ -23,11 +23,13 @@ func (c *scanClockFake) advance(d time.Duration) { c.now = c.now.Add(d) }
 func newTestScanState(total int) (*scanState, *scanClockFake) {
 	clock := &scanClockFake{now: time.Unix(0, 0)}
 
-	return newScanState(clock.Now, total), clock
+	return newScanState(clock.Now, total, false), clock
 }
 
-// walkFake advances the fake clock by took and reports the chat completion.
+// walkFake advances the fake clock by took, marking the chat started and
+// then completed like the real walk loop does.
 func walkFake(state *scanState, clock *scanClockFake, title string, matches int, took time.Duration) {
+	state.chatStart(title)
 	clock.advance(took)
 	state.chatDone(title, matches, took)
 }
@@ -80,7 +82,7 @@ func TestScanStateETAUnknownBeforeFirstChatAndAfterDone(t *testing.T) {
 		"a finished walk drops the ETA segment entirely")
 }
 
-func TestScanStateLinesRenderHeadAndTrail(t *testing.T) {
+func TestScanStateLinesRenderSettledChatsAndFooter(t *testing.T) {
 	t.Parallel()
 
 	state, clock := newTestScanState(61)
@@ -96,13 +98,17 @@ func TestScanStateLinesRenderHeadAndTrail(t *testing.T) {
 	// elapsed 2s + 3s + 7.3s = 12.3s.
 	for _, want := range []string{
 		"scanning 2/61", "matched 165 files", "ETA 2m27s", "12.3s",
-		"last chats:", "News Channel (37)", "Docs (128)",
+		"+ News Channel (37)", "+ Docs (128)",
 	} {
 		assert.Contains(t, joined, want)
 	}
 
-	// The newest chat renders last.
+	// Settled lines accumulate top-down, newest last, footer pinned below.
 	assert.Greater(t, strings.Index(joined, "Docs (128)"), strings.Index(joined, "News Channel (37)"))
+
+	lines := strings.Split(joined, "\n")
+	require.NotEmpty(t, lines)
+	assert.Contains(t, lines[len(lines)-1], "scanning 2/61", "footer renders last")
 }
 
 func TestScanStateLinesShowSingleTrailEntry(t *testing.T) {
@@ -113,7 +119,7 @@ func TestScanStateLinesShowSingleTrailEntry(t *testing.T) {
 	walkFake(state, clock, "Only", 4, time.Second)
 
 	joined := strings.Join(state.lines(NewStyler(false)), "\n")
-	assert.Contains(t, joined, "last chats: Only (4)")
+	assert.Contains(t, joined, "+ Only (4)")
 }
 
 func TestScanStateLinesUnknownETARendersPlaceholder(t *testing.T) {
@@ -134,12 +140,12 @@ func TestScanStateLinesTruncateLongTitles(t *testing.T) {
 
 	joined := strings.Join(state.lines(NewStyler(false)), "\n")
 
-	second := strings.Split(joined, "\n")[1]
-	prefix := "last chats: "
+	first := strings.Split(joined, "\n")[0]
+	prefix := "+ "
 
-	require.Contains(t, second, prefix)
+	require.Contains(t, first, prefix)
 
-	entry := strings.TrimSuffix(strings.TrimPrefix(second, prefix), " (1)")
+	entry := strings.TrimSuffix(strings.TrimPrefix(first, prefix), " (1)")
 
 	assert.Len(t, entry, scanTitleWidth)
 	assert.Contains(t, entry, "x~", "truncation keeps a tilde marker")
@@ -160,9 +166,13 @@ func TestScanStateLinesAndClockASCIIOnly(t *testing.T) {
 	t.Parallel()
 
 	state, clock := newTestScanState(5)
+	state.asciiOnly = true
 
 	walkFake(state, clock, strings.Repeat("long-title-", 6), 2, 90*time.Second)
 	walkFake(state, clock, "Docs", 128, 3*time.Second)
+
+	// An in-flight chat exercises the ASCII spinner frames too.
+	state.chatStart(strings.Repeat("current-", 8))
 
 	rendered := strings.Join(state.lines(NewStyler(true)), "\n") +
 		scanClock(time.Duration(99999)*time.Second)
@@ -215,7 +225,7 @@ func TestScanModelAppliesChatMessages(t *testing.T) {
 
 	view := next.View().Content
 	assert.Contains(t, view, "scanning 1/3")
-	assert.Contains(t, view, "last chats: News (7)")
+	assert.Contains(t, view, "+ News (7)")
 }
 
 func TestScanModelTickReschedules(t *testing.T) {
@@ -318,4 +328,39 @@ func newErrCmd() (*cobra.Command, *strings.Builder) {
 	cmd.SetErr(&buf)
 
 	return cmd, &buf
+}
+
+func TestScanStateSpinnerLineForCurrentChat(t *testing.T) {
+	t.Parallel()
+
+	state, clock := newTestScanState(4)
+
+	walkFake(state, clock, "A", 1, time.Second)
+
+	state.chatStart("Sirius")
+	state.spinner = 3
+
+	joined := strings.Join(state.lines(NewStyler(false)), "\n")
+	assert.Contains(t, joined, "⠸ Sirius", "braille spinner frame prefixes the active chat")
+	assert.NotContains(t, joined, "+ Sirius", "the active chat has not settled yet")
+
+	lines := strings.Split(joined, "\n")
+	require.GreaterOrEqual(t, len(lines), 3)
+	assert.Contains(t, lines[0], "+ A (1)", "settled lines come first")
+	assert.Contains(t, lines[len(lines)-1], "scanning 1/4", "footer stays last")
+}
+
+func TestScanStateAsciiSpinnerUnderNoASCII(t *testing.T) {
+	t.Parallel()
+
+	state, clock := newTestScanState(4)
+	state.asciiOnly = true
+
+	walkFake(state, clock, "A", 1, time.Second)
+
+	state.chatStart("Sirius")
+	state.spinner = 2
+
+	joined := strings.Join(state.lines(NewStyler(false)), "\n")
+	assert.Contains(t, joined, "- Sirius", "ASCII spinner frame prefixes the active chat")
 }
