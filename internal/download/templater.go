@@ -251,7 +251,7 @@ func sanitizeFilename(name string, msgID int64) string {
 
 // sanitizeRunes replaces path separators and control runes with underscores,
 // then trims leading and trailing dots, underscores and spaces so no
-// traversal or hidden-component games survive.
+// traversal, hidden-component or blank-segment games survive.
 func sanitizeRunes(text string) string {
 	var out strings.Builder
 
@@ -268,7 +268,7 @@ func sanitizeRunes(text string) string {
 		}
 	}
 
-	return strings.Trim(out.String(), "._")
+	return strings.Trim(out.String(), "._ ")
 }
 
 func isLetter(char rune) bool {

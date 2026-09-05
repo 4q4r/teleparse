@@ -406,7 +406,8 @@ func TestManagerDedupeSkipsKnownFile(t *testing.T) {
 
 	done := queuedItem(1, 100, 3)
 	done.Status = store.StatusDone
-	require.NoError(t, st.UpsertMedia(context.Background(), &done))
+	_, err := st.UpsertMedia(context.Background(), &done)
+	require.NoError(t, err)
 
 	var fetches atomic.Int64
 
@@ -428,6 +429,7 @@ func TestManagerDedupeSkipsKnownFile(t *testing.T) {
 	require.NoError(t, err)
 	assert.EqualValues(t, 0, res.Downloaded)
 	assert.EqualValues(t, 0, fetches.Load())
+	assert.EqualValues(t, 1, res.Duplicates, "the fast-path skip counts as a duplicate")
 }
 
 func TestManagerSkipExistingOption(t *testing.T) {
