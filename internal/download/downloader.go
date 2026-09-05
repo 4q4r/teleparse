@@ -44,10 +44,13 @@ type Config struct {
 	Concurrency  int
 	RetryMax     int
 	ClaimBatch   int
-	Dedupe       string // unique-id | hash | off; hash implies the unique-id pre-check
+	Dedupe       string // hardlink | unique-id | hash | off; hash implies the unique-id pre-check
 	SkipExisting bool
 	BackoffBase  time.Duration
 	HookTimeout  time.Duration
+	// Root is the resolved downloads root; hardlink mode keeps its blob
+	// store under Root/.teleparse/blobs so links never cross filesystems.
+	Root string
 }
 
 // Resolved is the resolver output for one media item: the final path, the
@@ -71,12 +74,18 @@ type ItemResolver interface {
 
 // Result summarizes one Manager run.
 type Result struct {
-	Downloaded   int64
-	Skipped      int64
-	Failed       int64
-	Retries      int64
-	Bytes        int64
-	Duplicates   int64
+	Downloaded int64
+	Skipped    int64
+	Failed     int64
+	Retries    int64
+	Bytes      int64
+	Duplicates int64
+	// Linked counts duplicate occurrences served by a hardlink (or its
+	// copy fallback) with zero network traffic.
+	Linked int64
+	// LinkCopies counts how many of those links fell back to byte copies
+	// on filesystems without hardlink support.
+	LinkCopies   int64
 	Parked       bool
 	ResumeAt     time.Time
 	FailedByChat map[int64]int64
@@ -93,10 +102,14 @@ type Manager struct {
 	reporter Reporter
 	items    ItemReporter
 	Fetch    FetchFunc
-	now      func() time.Time
+	// Link creates hardlinks for the blob store; overridable for tests.
+	Link             LinkFunc
+	now              func() time.Time
+	linkFallbackOnce sync.Once
 
-	chats      map[int64]struct{}
-	duplicates int64
+	chats        map[int64]struct{}
+	duplicates   int64
+	pendingLinks []store.MediaItem
 }
 
 // NewManager returns a Manager over the given state store, pacer, config,
@@ -143,6 +156,7 @@ func NewManager(
 		resolve:  resolve,
 		reporter: reporter,
 		items:    asItemReporter(reporter),
+		Link:     os.Link,
 		now:      time.Now,
 		chats:    map[int64]struct{}{},
 	}
@@ -166,6 +180,9 @@ func asItemReporter(reporter Reporter) ItemReporter {
 // is already done are skipped entirely; "hash" additionally treats a
 // post-download sha256 equal to an existing done row as a duplicate (the
 // pre-check itself is identical to unique-id). "off" re-downloads.
+// "hardlink" instead records every duplicate sighting — done-known or
+// unique-file-conflicted — as a pending occurrence, and Run later links
+// each occurrence's chat to the shared blob so every chat gets its file.
 // A file already tracked under a different message — including the same
 // file forwarded into another chat — is a benign skip counted into
 // Result.Duplicates; Enqueue never aborts on it, and the chat of the
@@ -184,6 +201,7 @@ func (m *Manager) Enqueue(ctx context.Context, items []store.MediaItem) error {
 
 			if exists && known.Status == store.StatusDone {
 				m.duplicates++
+				m.rememberOccurrence(item)
 
 				continue
 			}
@@ -196,6 +214,7 @@ func (m *Manager) Enqueue(ctx context.Context, items []store.MediaItem) error {
 
 		if !stored {
 			m.duplicates++
+			m.rememberOccurrence(item)
 
 			continue
 		}
@@ -260,6 +279,11 @@ func (m *Manager) Run(ctx context.Context, runID string) (Result, error) {
 	go m.feed(runCtx, items, errs)
 
 	workers.Wait()
+
+	// Hardlink dedupe: duplicate sightings recorded by Enqueue get their
+	// links now that this run's blobs exist. runCtx governs the drain so a
+	// flood-wait park inside it stops further occurrences.
+	m.drainPendingLinks(runCtx, ctx, runID, state)
 
 	var feedErr error
 
@@ -351,6 +375,12 @@ func (m *Manager) processItem(runCtx, bookCtx context.Context, runID string,
 		return
 	}
 
+	if m.hardlinkMode() {
+		m.processHardlinkItem(runCtx, bookCtx, runID, item, resolved, state)
+
+		return
+	}
+
 	finalPath, skip, err := m.finalPathFor(resolved.Path)
 	if err != nil {
 		m.failItem(bookCtx, state, item, err, m.cfg.RetryMax)
@@ -370,7 +400,15 @@ func (m *Manager) processItem(runCtx, bookCtx context.Context, runID string,
 func (m *Manager) downloadWithRetries(runCtx, bookCtx context.Context, runID string,
 	item store.MediaItem, resolved Resolved, finalPath string, state *runState,
 ) {
-	partPath := finalPath + m.cfg.Output.PartSuffix
+	// Hardlink mode downloads into the blob store (.part lives next to the
+	// blob) and promotes there; verifyAndPromote then links the final path.
+	promotePath := finalPath
+
+	if m.hardlinkMode() {
+		promotePath = blobPathOf(m.cfg.Root, item)
+	}
+
+	partPath := promotePath + m.cfg.Output.PartSuffix
 
 	part, offset, err := openPartFile(partPath, item.BytesDone)
 	if err != nil {
@@ -398,7 +436,9 @@ func (m *Manager) downloadWithRetries(runCtx, bookCtx context.Context, runID str
 
 		err := m.attemptOnce(runCtx, item, dest, offset, location, resolved)
 		if err == nil {
-			if promoteErr := m.verifyAndPromote(bookCtx, state, item, resolved, part, finalPath); promoteErr == nil {
+			promoteErr := m.verifyAndPromote(bookCtx, state, item, resolved, part, promotePath, finalPath)
+
+			if promoteErr == nil {
 				m.itemDone(key, false)
 
 				return
@@ -552,10 +592,11 @@ func (m *Manager) parkRun(bookCtx context.Context, runID string, state *runState
 }
 
 // verifyAndPromote fsyncs the part file, verifies its size, optionally
-// hashes it, renames it onto the final path, writes the sidecar, records
-// done and runs the post-download hooks.
+// hashes it, renames it onto the promote path (the final path, or the blob
+// in hardlink mode — which then hardlinks onto the final path), writes the
+// sidecar, records done and runs the post-download hooks.
 func (m *Manager) verifyAndPromote(bookCtx context.Context, state *runState,
-	item store.MediaItem, resolved Resolved, part *os.File, finalPath string,
+	item store.MediaItem, resolved Resolved, part *os.File, promotePath, finalPath string,
 ) error {
 	if err := part.Sync(); err != nil {
 		return fmt.Errorf("sync part file: %w", err)
@@ -586,8 +627,17 @@ func (m *Manager) verifyAndPromote(bookCtx context.Context, state *runState,
 		return fmt.Errorf("create output dir: %w", err)
 	}
 
-	if err := os.Rename(part.Name(), finalPath); err != nil {
+	if err := os.Rename(part.Name(), promotePath); err != nil {
 		return fmt.Errorf("promote part file: %w", err)
+	}
+
+	if promotePath != finalPath {
+		// Hardlink mode: the blob now holds the canonical bytes; serve the
+		// final path from it. Link problems degrade to a copy, never
+		// failing an item whose bytes exist.
+		if err := m.linkOrCopy(state, promotePath, finalPath); err != nil {
+			return fmt.Errorf("link blob to final path: %w", err)
+		}
 	}
 
 	if m.cfg.Output.Sidecar && resolved.Meta != nil {
@@ -906,5 +956,5 @@ func (w countingWriterAt) WriteAt(chunk []byte, off int64) (int, error) {
 }
 
 func dedupeEnabled(mode string) bool {
-	return mode == "unique-id" || mode == "hash"
+	return mode == "hardlink" || mode == "unique-id" || mode == "hash"
 }

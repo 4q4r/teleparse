@@ -5,6 +5,25 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Hardlink dedupe (new default)**: `dedupe = "hardlink"` downloads each unique
+  Telegram file once into the blob store under `<root>/.teleparse/blobs` and
+  hardlinks it into every chat that sighted it — zero extra network/disk for
+  repeats, and deleting any subset of the copies never breaks the survivors.
+  `teleparse dedupe stats | gc` inspects and cleans the blob store. On
+  filesystems without hardlink support links degrade to byte copies.
+  The `unique-id`, `hash` and `off` modes behave as before.
+
+### Changed
+
+- Default `filters.dedupe` is now `hardlink` (was `unique-id`); duplicate
+  sightings are linked into their chats instead of skipped.
+- The global `--root` flag now also updates the resolved downloads root;
+  previously only `output.root` from the config file took effect.
+
 ## [0.1.1] - 2026-09-05
 
 ### Changed

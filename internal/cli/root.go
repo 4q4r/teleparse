@@ -124,8 +124,13 @@ func newApp() *App {
 				cfg.Net.Proxy = v
 				cfg.Net.ProxySource = "flag"
 			}
-			if v, _ := cmd.Flags().GetString("root"); v != "" {
-				cfg.Output.Root = v
+			if rootFlag, _ := cmd.Flags().GetString("root"); rootFlag != "" {
+				cfg.Output.Root = rootFlag
+
+				// Load built paths from the pre-flag config; the resolved
+				// downloads root must follow the flag too (downloads,
+				// doctor and the blob store all read paths.Downloads).
+				paths.Downloads = rootFlag
 			}
 			rawFormat, _ := cmd.Flags().GetString("format")
 
@@ -180,6 +185,7 @@ func newApp() *App {
 		profileCmd(app),
 		exportCmd(app),
 		statsCmd(app),
+		dedupeCmd(app),
 		proxyCmd(app),
 		pingCmd(app),
 		doctorCmd(app),

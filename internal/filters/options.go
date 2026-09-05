@@ -194,7 +194,7 @@ type Options struct {
 	Limit        int       `toml:"limit"         flag:"limit"         usage:"max messages to SCAN per chat"`
 	Reverse      bool      `toml:"reverse"       flag:"reverse"       usage:"scan oldest-first instead of newest-first"`
 	Order        string    `toml:"order"         flag:"order"         usage:"output order: date|id (listing only)"`
-	Dedupe       string    `toml:"dedupe"        flag:"dedupe"        usage:"cross-chat dedup: unique-id|hash|off"`
+	Dedupe       string    `toml:"dedupe"        flag:"dedupe"        usage:"cross-chat dedup: hardlink|unique-id|hash|off"`
 	SkipExisting bool      `toml:"skip_existing" flag:"skip-existing" usage:"skip files already on disk"`
 	SinceState   string    `toml:"since_state"   flag:"since-state"   usage:"incremental: read per-chat watermarks from state db"`
 	Recursion    Recursion `toml:"recursion"     flag:""              usage:"recursion options (recurse-* flags)"`
@@ -225,7 +225,7 @@ func modeList(name string) []string {
 	case "service":
 		return []string{"", "any", "only", "exclude"}
 	case "dedupe":
-		return []string{"", "unique-id", "hash", "off"}
+		return []string{"", "hardlink", "unique-id", "hash", "off"}
 	default:
 		return nil
 	}

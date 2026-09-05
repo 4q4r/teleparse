@@ -144,6 +144,7 @@ server quirks that apply to your combination.
 | `profile save \| list \| show \| rm` | named filter presets in config |
 | `export jsonl \| csv` | manifest export |
 | `stats` | per-chat totals |
+| `dedupe stats \| gc` | inspect the hardlink blob store; `gc` removes blobs whose last copy is gone |
 | `proxy show \| test` | proxy config and DC probe (DCs 2-5) |
 | `ping [--dc N\|all]` | connect time + RPC RTT to Telegram DCs via the session |
 | `doctor` | config/creds/disk/DB/proxy diagnostics + premium status |
@@ -204,7 +205,7 @@ Families (AND-composed; every flag has a config-key twin):
 | Sender | `--sender-contacts` · `--sender-non-contacts` (inverse) · `--sender-mutual` · `--sender-non-mutual` (inverse) · `--from-me` · `--from @user,123,+15551234567` (ids \| @usernames \| phone numbers) · `--exclude` (same syntax) · `--sender-bot/premium/verified/scam/deleted` · `--sender-name-regex` |
 | Chat age | `--chat-min-age 1y` (chats with messages older than the cutoff; one probe RPC per chat — private chats expose no creation date) |
 | IDs & misc | `--min-id/--max-id` · `--service only` · `--silent` · `--spoiler` |
-| Execution | `--limit` (scan budget) · `--reverse` · `--dedupe unique-id\|hash\|off` · `--skip-existing` · `--recurse-topics` · `--follow-replies N` · `--albums expand\|first\|skip` |
+| Execution | `--limit` (scan budget) · `--reverse` · `--dedupe hardlink\|unique-id\|hash\|off` · `--skip-existing` · `--recurse-topics` · `--follow-replies N` · `--albums expand\|first\|skip` |
 
 Sizes: `500`, `10KB`, `20MB`, `1.5GiB`; durations `30s`/`10m`; dates ISO-8601 or relative `7d`/`12h`/`2w`.
 
@@ -280,7 +281,7 @@ collision = "index"                           # index | overwrite | skip
 sidecar   = true                              # <file>.json message metadata
 
 [filters]           # defaults; profiles overlay these
-dedupe = "unique-id"
+dedupe = "hardlink" # hardlink | unique-id | hash | off
 
 [profiles.videos]
 media = ["video"]
@@ -401,6 +402,22 @@ watermarks (`sync`), per-media rows with statuses/attempts/`bytes_done`, runs wi
 Downloads write `<file>.part` and complete via atomic rename; re-runs are idempotent
 (PK chat+message+index). Global dedup by stable Telegram file identity
 (`UNIQUE(media_class, media_id)`); optional SHA-256.
+
+### Hardlink dedupe (default)
+
+With `dedupe = "hardlink"` the same Telegram file sighted in N chats is downloaded
+exactly once into a canonical blob store under `<root>/.teleparse/blobs/<class>/<id><ext>`
+and **hardlinked** into each chat's templated path — zero extra network and zero extra
+disk for repeats. A hardlink *is* the file (same inode, N directory entries), so deleting
+any subset of the copies never breaks the survivors: data lives while at least one link
+exists. Delete every chat copy and the blob alone keeps the bytes; delete the blob itself
+and any surviving chat copy keeps the file (the next sighting re-downloads once into the
+blob and links from there). On filesystems without hardlink support the link degrades to
+a byte copy (counted as `link_copies` in the summary; warned once per run).
+
+`teleparse dedupe stats` reports blob count/bytes and tracked vs orphaned blobs;
+`teleparse dedupe gc` unlinks blobs whose link count is 1 — nothing references the data
+anymore, so the bytes are freed. Files are never touched, only the hidden blob store.
 
 ## Architecture
 
