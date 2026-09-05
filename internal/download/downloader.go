@@ -481,6 +481,15 @@ func (m *Manager) downloadWithRetries(runCtx, bookCtx context.Context, runID str
 
 		m.recordAttempt(bookCtx, item, err, attempt)
 
+		// Bytes the failed attempt persisted are already in the .part
+		// file: re-stat it so the next attempt resumes at the CURRENT
+		// size. The ranged engine starts its next request there (zero
+		// re-download); the parallel engine drops the re-transferred
+		// prefix via SkipWriterAt, as before.
+		if info, statErr := part.Stat(); statErr == nil {
+			offset = info.Size()
+		}
+
 		// Count only retries that actually follow: the last attempt of an
 		// exhausted ladder never gets one.
 		if attempt < m.cfg.RetryMax {
