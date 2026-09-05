@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/4q4r/teleparse/internal/config"
@@ -51,10 +52,14 @@ func (a *App) resolveCreds() (tg.Creds, error) {
 
 // resolveCredsInteractive resolves credentials for auth login: an unresolved
 // pair falls into the interactive interview when stdin is a terminal,
-// otherwise into the actionable help error.
-func resolveCredsInteractive(stdinTTY bool, ask credsPrompter) (tg.Creds, error) {
-	apiID, apiHash, _, err := config.Credentials()
+// otherwise into the actionable help error. notice (when non-nil) receives
+// a one-line status report ("env", "file", "prompted + saved to FILE") so
+// the user always sees why credentials were or were not asked.
+func resolveCredsInteractive(stdinTTY bool, ask credsPrompter, notice func(string) error) (tg.Creds, error) {
+	apiID, apiHash, source, err := config.Credentials()
 	if err == nil {
+		reportCredsSource(notice, source)
+
 		return tg.Creds{APIID: apiID, APIHash: apiHash}, nil
 	}
 
@@ -62,7 +67,30 @@ func resolveCredsInteractive(stdinTTY bool, ask credsPrompter) (tg.Creds, error)
 		return tg.Creds{}, credsHelpError(err)
 	}
 
-	return promptCreds(ask)
+	creds, err := promptCreds(ask)
+	if err != nil {
+		return tg.Creds{}, err
+	}
+
+	reportCredsSource(notice, "prompted"+savedCredsSuffix())
+
+	return creds, nil
+}
+
+func reportCredsSource(notice func(string) error, source string) {
+	if notice == nil {
+		return
+	}
+
+	_ = notice(source) // best-effort status line
+}
+
+func savedCredsSuffix() string {
+	if _, err := os.Stat(config.CredentialsPath()); err != nil {
+		return " (not saved)"
+	}
+
+	return " + saved to " + config.CredentialsPath()
 }
 
 // credsPrompter is the interactive seam of the credential interview: Line

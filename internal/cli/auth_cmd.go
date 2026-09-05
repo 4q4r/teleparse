@@ -156,16 +156,19 @@ func authLoginCmd(app *App) *cobra.Command {
 				return fail(cmd, errQRExclusive)
 			}
 
-			plan, err := resolveLoginMethod(loginMenuText(app.style), useQR, phone, importPath, tdataDir,
-				term.IsTerminal(int(os.Stdin.Fd())), newStdPrompter().Line)
+			creds, err := resolveCredsInteractive(
+				term.IsTerminal(int(os.Stdin.Fd())),
+				notifyingPrompter{newStdPrompter()},
+				func(source string) error {
+					return printLine(cmd, "%s\n", app.style.Dim("credentials: "+source))
+				},
+			)
 			if err != nil {
 				return fail(cmd, err)
 			}
 
-			creds, err := resolveCredsInteractive(
-				term.IsTerminal(int(os.Stdin.Fd())),
-				notifyingPrompter{newStdPrompter()},
-			)
+			plan, err := resolveLoginMethod(loginMenuText(app.style), useQR, phone, importPath, tdataDir,
+				term.IsTerminal(int(os.Stdin.Fd())), newStdPrompter().Line)
 			if err != nil {
 				return fail(cmd, err)
 			}

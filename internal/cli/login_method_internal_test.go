@@ -74,9 +74,14 @@ func TestResolveLoginMethodMenuChoices(t *testing.T) {
 func TestResolveLoginMethodMenuErrors(t *testing.T) {
 	t.Parallel()
 
-	_, err := resolveLoginMethod(loginMenuBody, false, "", "", "", true, scriptedAsk([]string{"7"}))
+	_, err := resolveLoginMethod(loginMenuBody, false, "", "", "", true, scriptedAsk([]string{"7", "7", "7"}))
 	require.Error(t, err)
 	require.ErrorIs(t, err, errBadLoginChoice)
+
+	// A single invalid choice re-asks instead of aborting.
+	plan, err := resolveLoginMethod(loginMenuBody, false, "", "", "", true, scriptedAsk([]string{"7", "2"}))
+	require.NoError(t, err)
+	require.True(t, plan.QR)
 
 	_, err = resolveLoginMethod(loginMenuBody, false, "", "", "", true, scriptedAsk([]string{"3", ""}))
 	require.Error(t, err)
