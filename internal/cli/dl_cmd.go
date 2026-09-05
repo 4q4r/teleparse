@@ -162,6 +162,10 @@ func runDownloadCommand(app *App, cmd *cobra.Command, specs []string, filterSet 
 		return fail(cmd, err)
 	}
 
+	if err := runConnectivityCheck(cmd, app); err != nil {
+		return fail(cmd, err)
+	}
+
 	for _, account := range accounts {
 		cfg := *app.cfg
 		cfg.Auth.Account = account
