@@ -703,7 +703,10 @@ func downloadRun(ctx context.Context, cmd *cobra.Command, state *store.Store, ap
 		Root:         app.paths.Downloads,
 		FileMaxSize:  takeoutCap,
 	}, resolver, reporter)
-	mgr.Fetch = download.ParallelFetch(pools, api, download.ParallelOptions{
+	// Nil pools under takeout select the ranged engine inside FetchFor:
+	// one connection means nothing to parallelize, and drops must resume
+	// from the exact on-disk offset.
+	mgr.Fetch = download.FetchFor(pools, api, download.FetchOptions{
 		Threads:  threads,
 		Reporter: reporter,
 	})
