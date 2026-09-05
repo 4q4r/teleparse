@@ -38,3 +38,9 @@
 - PR #8: -v/-h/-s, LiveReporter (bubbletea, uv-style, TTY-aware), DownloadPools (MediaOnly per-DC, FILE_MIGRATE retry), [download] threads=4/connections=3 (+turbo 8/6), FLOOD_PREMIUM_WAIT как throttle-нотисы. Исследование: без премиума аккаунт-левел троттлинг есть (FLOOD_PREMIUM_WAIT), но 3-8 параллельных соединений дают практический премиум-класс.
 - Actions у аккаунта забанен (навсегда) → верификация локальная; README badge заменён на статические.
 - main: 728+ тестов... (финальный счёт ниже), lint 0.
+
+## RELEASE v0.1.0 (2026-09-05)
+- Релизный билд поймал 2 кросс-платформенных бага: syscall.Flock (unix-only) и syscall.Statfs (unix-only) → lock_unix/lock_windows + disk_unix/disk_windows, x/sys/windows.
+- goreleaser v2: 6 таргетов (linux/darwin/windows × amd64/arm64), archives+checksums, GH_TOKEN через gh auth token (Actions забанен — релиз собран локально).
+- https://github.com/4q4r/teleparse/releases/tag/v0.1.0 — верифицировано: sha256 ЦЕЛ, бинарь запускается, version 0.1.0.
+- Финал: lint 0, 832+ тестов, кросс-компиляция 6/6.
