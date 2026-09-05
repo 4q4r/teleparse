@@ -125,6 +125,16 @@ func templateTail() string {
 # sizing to the premium preset (8/8) - TDLib's premium envelope. Explicit
 # threads/connections always win; false pins the defaults.
 
+# [scan] tunes walk caching for scan/dl/sync.
+
+[scan]
+# incremental = true
+# Reuse per-chat watermarks: repeat runs walk only messages newer than the
+# last successful pass instead of re-walking full history (10+ minute runs
+# become seconds). History-clear detection resets a chat whose newest
+# message dropped below its watermark. Pass --full to any of dl/scan/sync
+# to force one complete re-walk; set false here to always walk in full.
+
 # [output] controls where and how downloaded files land.
 
 [output]

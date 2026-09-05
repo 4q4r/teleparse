@@ -21,6 +21,7 @@ type fakeWalkAPI struct {
 	search      tg.MessagesMessagesClass
 	replies     tg.MessagesMessagesClass
 	forumTopics *tg.MessagesForumTopics
+	historyErr  error
 }
 
 //nolint:ireturn // mirrors the tg.Client method signature under test
@@ -28,6 +29,10 @@ func (f *fakeWalkAPI) MessagesGetHistory(
 	ctx context.Context, request *tg.MessagesGetHistoryRequest,
 ) (tg.MessagesMessagesClass, error) {
 	f.historyReq = request
+
+	if f.historyErr != nil {
+		return nil, f.historyErr
+	}
 
 	if f.history != nil {
 		return f.history, nil

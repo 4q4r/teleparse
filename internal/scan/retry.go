@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/gotd/td/telegram/query/messages"
@@ -41,9 +42,17 @@ func retryableWalkRPC(err error) bool {
 	return isTemporaryTransport(err)
 }
 
-// walkRetrySleep pauses between retries with exponential backoff; a
-// package-level function variable so tests inject a no-op.
-var walkRetrySleep = func(ctx context.Context, attempt int) error { //nolint:gochecknoglobals // test seam
+// walkRetrySleep pauses between retries with exponential backoff; held in
+// an atomic pointer so parallel tests can swap in a no-op without tripping
+// the race detector. Nil means the default backoff.
+var walkRetrySleep atomic.Pointer[retrySleepFunc] //nolint:gochecknoglobals // test seam
+
+// retrySleepFunc is the backoff signature of walkRetrySleep.
+type retrySleepFunc func(ctx context.Context, attempt int) error
+
+// defaultWalkRetrySleep backs off exponentially between history-page
+// retries.
+func defaultWalkRetrySleep(ctx context.Context, attempt int) error {
 	delay := walkRetryBase * time.Duration(walkRetryFactor^attempt)
 
 	select {
@@ -53,6 +62,17 @@ var walkRetrySleep = func(ctx context.Context, attempt int) error { //nolint:goc
 	}
 
 	return nil
+}
+
+// sleepBetweenRetries runs the currently installed backoff function,
+// falling back to the default when no override is installed.
+func sleepBetweenRetries(ctx context.Context, attempt int) error {
+	sleep := walkRetrySleep.Load()
+	if sleep == nil {
+		return defaultWalkRetrySleep(ctx, attempt)
+	}
+
+	return (*sleep)(ctx, attempt)
 }
 
 // retryingQuery wraps a messages.Query with transient-error retries:
@@ -80,7 +100,7 @@ func (q retryingQuery) Query(ctx context.Context, req messages.Request) (tg.Mess
 			return nil, fmt.Errorf("history page after %d attempts: %w", attempt+1, err)
 		}
 
-		if err := walkRetrySleep(ctx, attempt); err != nil {
+		if err := sleepBetweenRetries(ctx, attempt); err != nil {
 			return nil, fmt.Errorf("walk retry canceled: %w", err)
 		}
 	}
