@@ -84,6 +84,10 @@ type Result struct {
 	Retries    int64
 	Bytes      int64
 	Duplicates int64
+	// Interrupted counts transfers settled by cancellation — user interrupt,
+	// flood-wait park sibling or dropped connection — with their .part kept
+	// and retry budget unburned, so a later run resumes them.
+	Interrupted int64
 	// Linked counts duplicate occurrences served by a hardlink (or its
 	// copy fallback) with zero network traffic.
 	Linked int64
@@ -314,6 +318,12 @@ func (m *Manager) feed(ctx context.Context, items chan<- store.MediaItem, errs c
 
 			batch, err := m.store.ClaimPending(ctx, chatID, m.cfg.ClaimBatch, m.cfg.RetryMax)
 			if err != nil {
+				if ctx.Err() != nil {
+					// The run was canceled while claiming (user interrupt or
+					// park): a canceled claim is a clean stop, not a failure.
+					return
+				}
+
 				errs <- fmt.Errorf("claim pending chat %d: %w", chatID, err)
 
 				return
@@ -482,16 +492,26 @@ func (m *Manager) downloadWithRetries(runCtx, bookCtx context.Context, runID str
 		}
 
 		if err := m.sleepBackoff(runCtx, attempt); err != nil {
-			m.failItem(bookCtx, state, item, err, attempt)
+			m.settleInterruptible(bookCtx, state, item, err, attempt)
 
 			return
 		}
 
 		if err := m.pacer.Wait(runCtx); err != nil {
-			m.failItem(bookCtx, state, item, err, attempt)
+			m.settleInterruptible(bookCtx, state, item, err, attempt)
 
 			return
 		}
+	}
+
+	// The ladder is exhausted. A cancellation-flavored exhaustion (dropped
+	// connection under takeout, interrupt racing the last attempt) is an
+	// interrupt, not a failure: the item stays resumable with its budget
+	// unburned instead of being burned to terminal failed.
+	if isCancellationErr(lastErr) {
+		m.interruptItem(bookCtx, state, item, lastErr)
+
+		return
 	}
 
 	// The ladder is exhausted: only now does the row leave downloading, so
@@ -533,12 +553,18 @@ func (m *Manager) attemptOnce(ctx context.Context, item store.MediaItem,
 }
 
 // handleFailure classifies a failed attempt and reports whether item
-// processing must stop (parked, fatal or cancelled). Retryable errors
+// processing must stop (parked, fatal or interrupted). Retryable errors
 // return false so the attempt loop backs off and retries.
 func (m *Manager) handleFailure(runCtx, bookCtx context.Context, runID string, state *runState,
 	item store.MediaItem, err error, attempt int, resolved Resolved, location *tg.InputFileLocationClass,
 ) bool {
 	switch {
+	case runCtx.Err() != nil && isCancellationErr(err):
+		// The run itself was canceled (user interrupt or park) and the
+		// in-flight transfer surfaced it: settle resumable, never fatal.
+		m.interruptItem(bookCtx, state, item, err)
+
+		return true
 	case runCtx.Err() != nil:
 		m.failItem(bookCtx, state, item, err, attempt)
 
@@ -548,6 +574,11 @@ func (m *Manager) handleFailure(runCtx, bookCtx context.Context, runID string, s
 
 		return true
 	default:
+		// A wrapped context.Canceled while the run is alive is a dropped
+		// connection (gotd's RPC engine closes with "engine forcibly
+		// closed" when its pooled connection dies mid-request), not a user
+		// interrupt: the ladder retries it like any transient error and a
+		// later exhaustion settles it as interrupted.
 		return m.handleFloodOrRefetch(runCtx, bookCtx, runID, state, item, err, attempt, resolved, location)
 	}
 }
@@ -851,6 +882,50 @@ func (m *Manager) failItem(ctx context.Context, state *runState,
 	m.reporter.Inc("failed", reportEveryAttempts)
 }
 
+// isCancellationErr reports whether err carries a context cancellation:
+// gotd wraps the per-connection RPC engine's own context.Canceled as
+// "engine forcibly closed: context canceled" when a pooled connection dies
+// mid-request, so a wrapped cancel does not imply the run was interrupted.
+func isCancellationErr(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+// settleInterruptible routes a ladder-phase failure (backoff sleep, pace
+// wait) through interrupt-or-fail semantics: cancellation flavors settle
+// resumable, everything else stays a failure.
+func (m *Manager) settleInterruptible(ctx context.Context, state *runState,
+	item store.MediaItem, err error, attempt int,
+) {
+	if isCancellationErr(err) {
+		m.interruptItem(ctx, state, item, err)
+
+		return
+	}
+
+	m.failItem(ctx, state, item, err, attempt)
+}
+
+// interruptItem settles a cancellation-interrupted transfer: the row stays
+// owned by the run with its retry budget restored (resumable via the same
+// reset path as crash recovery), the .part file keeps its bytes, the UI
+// retires the line without a FAIL reason and the run counts it interrupted
+// instead of failed.
+func (m *Manager) interruptItem(ctx context.Context, state *runState, item store.MediaItem, err error) {
+	key := itemKeyOf(item)
+
+	if err := m.store.MarkInterrupted(ctx, item.ChatID, item.MessageID, item.MediaIndex, err.Error()); err != nil {
+		m.reporter.Inc("store_errors", 1)
+	}
+
+	m.itemInterrupted(key)
+
+	state.mutate(func(res *Result) {
+		res.Interrupted++
+	})
+
+	m.reporter.Inc("interrupted", reportEveryAttempts)
+}
+
 // skipItem marks an item done at an already-present path.
 func (m *Manager) skipItem(ctx context.Context, state *runState, item store.MediaItem, path string) {
 	if err := m.store.MarkDone(ctx, item.ChatID, item.MessageID, item.MediaIndex, path, nil); err != nil {
@@ -990,6 +1065,19 @@ func (m *Manager) itemFailed(key string, attempts int, err error) {
 	m.itemDone(key, true)
 }
 
+// itemInterrupted retires an interrupted transfer: reporters that implement
+// InterruptedReporter settle it without a FAIL reason; others fall back to
+// a non-failed ItemDone.
+func (m *Manager) itemInterrupted(key string) {
+	if interrupted, ok := m.reporter.(InterruptedReporter); ok {
+		interrupted.ItemInterrupted(key)
+
+		return
+	}
+
+	m.itemDone(key, false)
+}
+
 // countingAt wraps dest with byte accounting when the reporter opted in;
 // plain reporters keep the unwrapped destination.
 func (m *Manager) countingAt(key string, dest io.WriterAt) io.WriterAt {
@@ -997,20 +1085,29 @@ func (m *Manager) countingAt(key string, dest io.WriterAt) io.WriterAt {
 		return dest
 	}
 
-	return countingWriterAt{inner: dest, key: key, sink: m.items}
+	return &countingWriterAt{inner: dest, key: key, sink: m.items}
 }
 
-// countingWriterAt reports every persisted byte delta to the item sink.
+// countingWriterAt reports persisted-byte deltas to the item sink under
+// high-water-mark accounting: gotd re-requests overlapping ranges on
+// internal retries and every ladder attempt restarts the transfer, so only
+// the portion of a write beyond the previous maximum written end counts and
+// rewritten bytes contribute zero — progress tracks unique file bytes, not
+// network traffic.
 type countingWriterAt struct {
 	inner io.WriterAt
 	key   string
 	sink  ItemReporter
+
+	mu  sync.Mutex
+	hwm int64
 }
 
-func (w countingWriterAt) WriteAt(chunk []byte, off int64) (int, error) {
+func (w *countingWriterAt) WriteAt(chunk []byte, off int64) (int, error) {
 	written, err := w.inner.WriteAt(chunk, off)
+
 	if written > 0 {
-		w.sink.ItemProgress(w.key, int64(written))
+		w.reportDelta(off + int64(written))
 	}
 
 	if err != nil {
@@ -1018,6 +1115,24 @@ func (w countingWriterAt) WriteAt(chunk []byte, off int64) (int, error) {
 	}
 
 	return written, nil
+}
+
+// reportDelta advances the high-water mark to end and reports only the
+// extension beyond it; the mutex covers the concurrent WriterAt contract
+// even though gotd serializes its write loop.
+func (w *countingWriterAt) reportDelta(end int64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	delta := end - w.hwm
+
+	if delta <= 0 {
+		return
+	}
+
+	w.hwm = end
+
+	w.sink.ItemProgress(w.key, delta)
 }
 
 func dedupeEnabled(mode string) bool {

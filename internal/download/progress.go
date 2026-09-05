@@ -37,6 +37,16 @@ type ItemReporter interface {
 	Throttled(seconds int)
 }
 
+// InterruptedReporter receives the retirement of a cancellation-interrupted
+// transfer: the item stays resumable (.part kept, retry budget unburned), so
+// it must settle without a FAIL reason. It is an optional capability probed
+// by type assertion; reporters that do not implement it fall back to
+// ItemDone(key, false).
+type InterruptedReporter interface {
+	// ItemInterrupted retires key as interrupted-but-resumable.
+	ItemInterrupted(key string)
+}
+
 // NoopReporter discards every update.
 type NoopReporter struct{}
 
