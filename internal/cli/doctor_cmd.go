@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 	"teleparse/internal/config"
 	"teleparse/internal/tg"
 	"time"
@@ -193,15 +192,9 @@ func checkDownloads(root string) doctorCheck {
 		}
 	}
 
-	var stats syscall.Statfs_t
-
-	if err := syscall.Statfs(root, &stats); err != nil {
-		return doctorCheck{name: "downloads root", err: fmt.Errorf("statfs %s: %w", root, err)}
-	}
-
-	free := uint64(0)
-	if stats.Bsize > 0 {
-		free = stats.Bavail * uint64(stats.Bsize)
+	free, err := diskFreeBytes(root)
+	if err != nil {
+		return doctorCheck{name: "downloads root", err: fmt.Errorf("disk free %s: %w", root, err)}
 	}
 
 	if free < minFreeBytes {
