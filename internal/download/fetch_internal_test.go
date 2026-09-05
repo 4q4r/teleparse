@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"testing"
 
 	"github.com/4q4r/teleparse/internal/store"
@@ -336,4 +337,79 @@ func TestParallelFetchNilPoolsRidesFallback(t *testing.T) {
 	require.Len(t, runner.calls, 1)
 	assert.Equal(t, 9, runner.calls[0].rpc.dc, "nil pools must use the fallback client")
 	assert.Equal(t, 4, runner.calls[0].threads)
+}
+
+// TestResolveLocationRefetchesWhenMissing pins the hydration contract:
+// a nil location with a refetch hook fetches the message once and returns
+// its fresh location.
+func TestResolveLocationRefetchesWhenMissing(t *testing.T) {
+	t.Parallel()
+
+	fresh := &tg.InputDocumentFileLocation{ID: 7}
+	refetched := false
+
+	in := Input{Item: store.MediaItem{ChatID: 1, MessageID: 2, MediaIndex: 3, MediaClass: "video", MediaID: 7}}
+	in.Refetch = func(context.Context) (tg.InputFileLocationClass, error) {
+		refetched = true
+
+		return fresh, nil
+	}
+
+	location, err := resolveLocation(t.Context(), in)
+	require.NoError(t, err)
+	assert.Same(t, fresh, location)
+	assert.True(t, refetched, "the hook must run exactly once")
+}
+
+// TestResolveLocationWithoutHooksFails pins the terminal case: no location
+// and no hook is the only path that may report ErrNoLocation.
+func TestResolveLocationWithoutHooksFails(t *testing.T) {
+	t.Parallel()
+
+	in := Input{Item: store.MediaItem{ChatID: 1, MessageID: 2, MediaIndex: 3, MediaClass: "video", MediaID: 7}}
+
+	_, err := resolveLocation(t.Context(), in)
+	require.ErrorIs(t, err, ErrNoLocation)
+}
+
+// TestResolveLocationRefetchErrorSurfaces pins that refetch failures keep
+// their real cause instead of collapsing into ErrNoLocation.
+func TestResolveLocationRefetchErrorSurfaces(t *testing.T) {
+	t.Parallel()
+
+	gone := fmt.Errorf("message 2 in chat 1: %w", ErrMessageGone)
+
+	in := Input{Item: store.MediaItem{ChatID: 1, MessageID: 2, MediaIndex: 3, MediaClass: "video", MediaID: 7}}
+	in.Refetch = func(context.Context) (tg.InputFileLocationClass, error) {
+		return nil, gone
+	}
+
+	_, err := resolveLocation(t.Context(), in)
+	require.ErrorIs(t, err, ErrMessageGone)
+	assert.NotErrorIs(t, err, ErrNoLocation)
+}
+
+// TestIsFatalTGErrorClassifiesRefetchOutcomes pins the ladder: refetch
+// sentinels are fatal, transport errors stay retryable.
+func TestIsFatalTGErrorClassifiesRefetchOutcomes(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		err   error
+		fatal bool
+	}{
+		"message gone":       {err: fmt.Errorf("refetch 1/2: %w", ErrMessageGone), fatal: true},
+		"media gone":         {err: fmt.Errorf("message 1/2 carries no downloadable media: %w", ErrMediaGone), fatal: true},
+		"id invalid on wire": {err: tgerr.New(400, "MESSAGE_ID_INVALID"), fatal: true},
+		"network reset": {
+			err:   &net.OpError{Op: "read", Net: "tcp", Err: errors.New("connection reset")},
+			fatal: false,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tc.fatal, isFatalTGError(tc.err))
+		})
+	}
 }

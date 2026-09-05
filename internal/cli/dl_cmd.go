@@ -553,7 +553,7 @@ func (c *walkCollector) observe(fctx filters.Context, msg *tgapi.Message) {
 		return
 	}
 
-	c.cache.put(msgCacheKey{chatID: fctx.Chat.ID, msgID: fctx.Message.ID}, walkedMessage{fctx: fctx, msg: msg})
+	c.cache.put(msgCacheKey{chatID: fctx.Chat.ID, msgID: fctx.Message.ID}, walkedMessage{fctx: &fctx, msg: msg})
 
 	item, ok := mediaItemFromMessage(fctx, msg)
 	if !ok {

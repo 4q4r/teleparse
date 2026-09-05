@@ -507,7 +507,7 @@ func (m *Manager) attemptOnce(ctx context.Context, item store.MediaItem,
 		return fmt.Errorf("pace before %d/%d: %w", item.ChatID, item.MessageID, err)
 	}
 
-	in := Input{Item: item, Offset: offset, Location: location, DC: resolved.DC}
+	in := Input{Item: item, Offset: offset, Location: location, DC: resolved.DC, Refetch: resolved.Refetch}
 
 	if _, err := m.Fetch(ctx, in, dest); err != nil {
 		return fmt.Errorf("fetch %d/%d/%d: %w", item.ChatID, item.MessageID, item.MediaIndex, err)
@@ -556,10 +556,25 @@ func (m *Manager) handleFloodOrRefetch(runCtx, bookCtx context.Context, runID st
 
 	// FILE_REFERENCE_EXPIRED: file references expire server-side; refetch the
 	// source message (messages.getMessages / channels.getMessages) to mint a
-	// fresh reference and retry the same transfer.
+	// fresh reference and retry the same transfer. This is the same resolver
+	// path that hydrates cached manifest items without walk context, so a
+	// refetch that reports the message gone for good fails fast with its
+	// real cause instead of looping until the ladder exhausts.
 	if tgerr.Is(err, tg.ErrFileReferenceExpired) && resolved.Refetch != nil {
-		if fresh, refetchErr := resolved.Refetch(runCtx); refetchErr == nil {
+		fresh, refetchErr := resolved.Refetch(runCtx)
+
+		// A fatal refetch outcome (message or media gone) fails the item
+		// with its real cause; a transient one keeps the stale location so
+		// the next expiry refetches again.
+		switch {
+		case refetchErr == nil:
 			*location = fresh
+		case isFatalTGError(refetchErr):
+			m.failItem(bookCtx, state, item,
+				fmt.Errorf("refetch after expired file reference: %w", refetchErr), attempt)
+
+			return true
+		default:
 		}
 	}
 
@@ -856,13 +871,15 @@ func (m *Manager) sleepBackoff(ctx context.Context, attempt int) error {
 }
 
 // isFatalTGError reports Telegram errors that no retry can fix: the message
-// or its media is gone for good.
+// or its media is gone for good, on the wire or reported by a refetch.
 func isFatalTGError(err error) bool {
 	switch {
 	case tgerr.Is(err, "MESSAGE_ID_INVALID"),
 		tgerr.Is(err, "MESSAGE_DELETED"),
 		tgerr.Is(err, "MEDIA_EMPTY"),
-		tgerr.Is(err, "MEDIA_INVALID"):
+		tgerr.Is(err, "MEDIA_INVALID"),
+		errors.Is(err, ErrMessageGone),
+		errors.Is(err, ErrMediaGone):
 		return true
 	default:
 		return false
