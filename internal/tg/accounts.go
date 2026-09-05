@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"syscall"
 
 	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
@@ -76,7 +75,7 @@ func (m *AccountManager) Lock(name string) (*AccountLock, error) {
 		return nil, fmt.Errorf("open lock %s: %w", path, err)
 	}
 
-	if err := syscall.Flock(int(handle.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := lockHandle(handle.Fd()); err != nil {
 		_ = handle.Close()
 
 		return nil, fmt.Errorf("%q: %w: %w", canonical, ErrAccountInUse, err)
@@ -92,7 +91,7 @@ type AccountLock struct {
 
 // Close releases the lock and closes the file descriptor.
 func (l *AccountLock) Close() error {
-	if err := syscall.Flock(int(l.handle.Fd()), syscall.LOCK_UN); err != nil {
+	if err := unlockHandle(l.handle.Fd()); err != nil {
 		_ = l.handle.Close()
 
 		return fmt.Errorf("unlock account: %w", err)
