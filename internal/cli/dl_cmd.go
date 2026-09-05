@@ -383,13 +383,10 @@ func executeRun(ctx context.Context, cmd *cobra.Command, app *App, account, prof
 
 	resolver, collector := newRunResolver(app, api)
 
-	// Preview modes (scan, dry-run, count-only) show the live walk
-	// progress; plain dl gets its download LiveReporter instead.
-	var progress *scanProgress
-
-	if mode.dryRun || mode.countOnly {
-		progress = newScanProgress(cmd, app, len(targets))
-	}
+	// Every walk mode — plain dl and sync as much as dry-run and
+	// count-only — renders the live walk progress instead of minutes of
+	// silence before downloads appear.
+	progress := walkProgressFor(mode, cmd, app, len(targets))
 
 	walkStarted := time.Now()
 
@@ -419,6 +416,12 @@ func executeRun(ctx context.Context, cmd *cobra.Command, app *App, account, prof
 
 	if mode.dryRun || mode.countOnly {
 		return previewRun(ctx, cmd, app, state, runID, collector, targets, mode, time.Since(walkStarted))
+	}
+
+	// The walk surface is closed above; the transition line hands the
+	// terminal over to the download reporter that downloadRun opens.
+	if err := printWalkTransition(cmd, app, len(targets), len(collector.items), cachedTotal(collector)); err != nil {
+		return err
 	}
 
 	return downloadRun(ctx, cmd, state, app, runID, account, resolver,
@@ -741,6 +744,45 @@ func downloadRun(ctx context.Context, cmd *cobra.Command, state *store.Store, ap
 	return advanceWatermarks(ctx, cmd, state, res, collector, targets, silent)
 }
 
+// walkTransition renders the walk-to-download handover text; the cached
+// segment appears only when incremental walks carried prior-run matches.
+func walkTransition(chats, matched int, cached int64) string {
+	if cached > 0 {
+		return fmt.Sprintf("walked %d chats, matched %d files (+%d cached) - downloading", chats, matched, cached)
+	}
+
+	return fmt.Sprintf("walked %d chats, matched %d files - downloading", chats, matched)
+}
+
+// printWalkTransition writes the dim handover line to stderr after the
+// walk surface closed and before the download reporter opens; silent
+// mode stays quiet.
+func printWalkTransition(cmd *cobra.Command, app *App, chats, matched int, cached int64) error {
+	if app.silentMode(cmd) {
+		return nil
+	}
+
+	line := app.errStyle.Dim(walkTransition(chats, matched, cached))
+
+	if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s\n", line); err != nil {
+		return fmt.Errorf("print walk transition: %w", err)
+	}
+
+	return nil
+}
+
+// cachedTotal sums the prior-run manifest counts the incremental walk
+// stashed per chat.
+func cachedTotal(collector *walkCollector) int64 {
+	var cached int64
+
+	for _, value := range collector.cached {
+		cached += value
+	}
+
+	return cached
+}
+
 // takeoutPoolsNotice explains the single-connection download mode under an
 // active takeout session.
 const takeoutPoolsNotice = "downloads ride the takeout session " +
@@ -1042,11 +1084,7 @@ func printPlan(cmd *cobra.Command, collector *walkCollector) error {
 		return err
 	}
 
-	var cached int64
-
-	for _, value := range collector.cached {
-		cached += value
-	}
+	cached := cachedTotal(collector)
 
 	if cached == 0 {
 		return printLine(cmd, "total: %d file(s), %s\n", len(collector.items), humanTotalSize(collector))

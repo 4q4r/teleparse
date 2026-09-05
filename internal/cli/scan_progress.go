@@ -258,6 +258,14 @@ func newScanProgress(cmd *cobra.Command, app *App, total int) *scanProgress {
 	return &scanProgress{out: cmd.ErrOrStderr(), styler: app.errStyle, total: total}
 }
 
+// walkProgressFor builds the walk progress surface for a run. Every mode
+// walks chats and shows the same surface — plain dl and sync as much as
+// dry-run and count-only — so mode gates nothing here; newScanProgress
+// enforces the -s and empty-scope opt-outs.
+func walkProgressFor(_ runMode, cmd *cobra.Command, app *App, total int) *scanProgress {
+	return newScanProgress(cmd, app, total)
+}
+
 // chatStart reports that the walk of title began.
 func (p *scanProgress) chatStart(title string) {
 	if p == nil || !p.tty {
