@@ -69,22 +69,55 @@ func TestFilterByMinAge(t *testing.T) {
 		{InputPeer: &tg.InputPeerUser{UserID: 4}, Chat: filters.Chat{ID: 4}},
 	}
 
-	kept, err := scan.FilterByMinAge(context.Background(), api, targets, 24*time.Hour)
+	var progressCalls []int
+
+	kept, err := scan.FilterByMinAge(context.Background(), api, targets, 24*time.Hour,
+		func(done, total int) {
+			progressCalls = append(progressCalls, done)
+		})
 	require.NoError(t, err)
 	require.Len(t, kept, 2)
 	assert.Equal(t, int64(2), kept[0].Chat.ID)
 	assert.Equal(t, int64(4), kept[1].Chat.ID)
 
 	require.Len(t, api.probes, 3, "one probe per target")
+	require.Len(t, progressCalls, 3, "progress reports every completed probe")
+	assert.Equal(t, 3, progressCalls[len(progressCalls)-1])
 	assert.Equal(t, 1, api.probes[0].Limit)
 	assert.NotZero(t, api.probes[0].OffsetDate, "probe must bound by cutoff date")
 
-	all, err := scan.FilterByMinAge(context.Background(), api, targets, 0)
+	all, err := scan.FilterByMinAge(context.Background(), api, targets, 0, nil)
 	require.NoError(t, err)
 	assert.Len(t, all, 3, "zero age is a no-op")
 
 	probesBefore := len(api.probes)
-	_, err = scan.FilterByMinAge(context.Background(), api, targets, 0)
+	_, err = scan.FilterByMinAge(context.Background(), api, targets, 0, nil)
 	require.NoError(t, err)
 	assert.Len(t, api.probes, probesBefore, "zero age skips probing")
+}
+
+func TestFilterByMinAgeParallelPreservesOrder(t *testing.T) {
+	t.Parallel()
+
+	api := &ageProbeAPI{}
+
+	const targetCount = 50
+
+	targets := make([]scan.Target, targetCount)
+
+	for idx := range targetCount {
+		targets[idx] = scan.Target{
+			InputPeer: &tg.InputPeerUser{UserID: int64(idx)},
+			Chat:      filters.Chat{ID: int64(idx)},
+		}
+	}
+
+	kept, err := scan.FilterByMinAge(context.Background(), api, targets, time.Hour, nil)
+	require.NoError(t, err)
+
+	require.Len(t, kept, targetCount/2, "even ids qualify")
+
+	for idx, target := range kept {
+		assert.Equal(t, int64(idx*2), target.Chat.ID, "original target order preserved")
+	}
 }
