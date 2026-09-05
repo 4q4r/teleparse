@@ -5,7 +5,10 @@ import (
 )
 
 func syncCmd(app *App) *cobra.Command {
-	var filterSet filterFlags
+	var (
+		filterSet filterFlags
+		flags     dlRunFlags
+	)
 
 	cmd := &cobra.Command{
 		Use:     "sync [CHATS]...",
@@ -13,10 +16,14 @@ func syncCmd(app *App) *cobra.Command {
 		Example: "  teleparse sync @durov\n  teleparse sync all --chat-type channel",
 		Args:    cobra.ArbitraryArgs,
 		RunE: func(c *cobra.Command, args []string) error {
-			return runDownloadCommand(app, c, args, &filterSet, dlRunFlags{}, runMode{syncMode: true}, "")
+			return runDownloadCommand(app, c, args, &filterSet, flags, runMode{
+				syncMode: true,
+				fullWalk: flags.full,
+			}, "")
 		},
 	}
 	cmd.Flags().String("profile", "", "named filter profile overlay")
+	addFullWalkFlag(cmd, &flags)
 	addSilentOutputMirror(cmd)
 	addFilterFlags(cmd, &filterSet)
 

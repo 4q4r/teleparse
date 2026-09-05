@@ -150,6 +150,13 @@ func (d Download) usingDefaultSizing() bool {
 	return d.Threads == DefaultThreads && d.Connections == DefaultConnections
 }
 
+// Scan tunes walk caching: incremental walks reuse per-chat watermarks so
+// repeat runs only walk messages that appeared since the last successful
+// pass, instead of re-walking full history every time.
+type Scan struct {
+	Incremental bool `toml:"incremental"`
+}
+
 // Config is the root configuration object.
 type Config struct {
 	Auth     Auth               `toml:"auth"`
@@ -157,6 +164,7 @@ type Config struct {
 	Pacing   Pacing             `toml:"pacing"`
 	Output   Output             `toml:"output"`
 	Download Download           `toml:"download"`
+	Scan     Scan               `toml:"scan"`
 	Filters  Filters            `toml:"filters"`
 	Hooks    Hooks              `toml:"hooks"`
 	Profiles map[string]Filters `toml:"profiles"`
@@ -233,6 +241,9 @@ func Default() *Config {
 			Threads:      DefaultThreads,
 			Connections:  DefaultConnections,
 			PremiumBoost: true,
+		},
+		Scan: Scan{
+			Incremental: true,
 		},
 		Filters: Filters{
 			Dedupe: "unique-id",

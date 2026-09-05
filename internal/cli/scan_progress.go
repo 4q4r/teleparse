@@ -55,6 +55,7 @@ type scanState struct {
 	spinner   int
 	asciiOnly bool
 	settled   []scanDoneEntry
+	notes     []string
 }
 
 func newScanState(now func() time.Time, total int, asciiOnly bool) *scanState {
@@ -108,15 +109,18 @@ func (s *scanState) eta() (time.Duration, bool) {
 }
 
 // lines renders the uv-style block: settled chat lines ("+ Title (N)"),
-// the spinner line for the chat being walked, and the counters footer
-// (scanning X/Y, matched, elapsed, ETA) pinned last.
+// the spinner line for the chat being walked, any dim notes (history-clear
+// resets) and the counters footer (scanning X/Y, matched, elapsed, ETA)
+// pinned last.
 func (s *scanState) lines(styler Styler) []string {
-	out := make([]string, 0, len(s.settled)+2)
+	out := make([]string, 0, len(s.settled)+len(s.notes)+2)
 
 	for _, entry := range s.settled {
 		out = append(out, styler.Success("+")+" "+truncateScanTitle(entry.title)+" ("+
 			styler.Success(strconv.Itoa(entry.matches))+")")
 	}
+
+	out = append(out, s.notes...)
 
 	if s.current != "" && s.done < s.total {
 		out = append(out, styler.Dim(s.spin())+" "+truncateScanTitle(s.current))
@@ -169,6 +173,7 @@ type (
 		matches int
 		took    time.Duration
 	}
+	scanNoteMsg struct{ line string }
 	scanTickMsg time.Time
 )
 
@@ -192,6 +197,8 @@ func (m scanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn /
 		m.state.chatStart(typed.title)
 	case scanChatMsg:
 		m.state.chatDone(typed.title, typed.matches, typed.took)
+	case scanNoteMsg:
+		m.state.notes = append(m.state.notes, typed.line)
 	default:
 		return m, nil
 	}
@@ -228,14 +235,17 @@ func newScanProgress(cmd *cobra.Command, app *App, total int) *scanProgress {
 	if !app.noASCII && term.IsTerminal(int(os.Stderr.Fd())) {
 		state := newScanState(time.Now, total, app.noASCII)
 
-		// TERM_PROGRAM=Apple_Terminal suppresses bubbletea's DECRQM
-		// capability query (mode 2026/2027): on fast abnormal exits the
-		// terminal reply otherwise leaks into the user's shell line.
+		// TERM_PROGRAM=Apple_Terminal plus TERM=xterm-256color suppress
+		// bubbletea's DECRQM capability query (mode 2026/2027): that code
+		// path queries ghostty/wezterm-class TERM names unconditionally,
+		// and on fast abnormal exits the terminal reply otherwise leaks
+		// into the user's shell line. xterm-256color matches none of the
+		// query clauses while keeping 256-color output intact.
 		program := tea.NewProgram(scanModel{state: state, styler: app.errStyle},
 			tea.WithOutput(cmd.ErrOrStderr()),
 			tea.WithInput(nil),
 			tea.WithoutSignalHandler(),
-			tea.WithEnvironment(append(os.Environ(), "TERM_PROGRAM=Apple_Terminal")),
+			tea.WithEnvironment(append(os.Environ(), "TERM_PROGRAM=Apple_Terminal", "TERM=xterm-256color")),
 		)
 
 		go func() {
@@ -275,6 +285,25 @@ func (p *scanProgress) chatDone(title string, matches int, took time.Duration) {
 		p.done, p.total, title, p.styler.Success(strconv.Itoa(matches)+" matches"))
 
 	_, _ = fmt.Fprint(p.out, line)
+}
+
+// chatCleared notes that a chat's history was mass-cleared and the walk
+// restarts in full: a dim settled line on the live view, a plain dim line
+// on the line surface.
+func (p *scanProgress) chatCleared(title string) {
+	if p == nil {
+		return
+	}
+
+	line := "history cleared: " + title + " (re-walking)"
+
+	if p.tty {
+		p.program.Send(scanNoteMsg{line: line})
+
+		return
+	}
+
+	_, _ = fmt.Fprint(p.out, p.styler.Dim(line)+"\n")
 }
 
 // close tears the live program down; a no-op for the line surface.

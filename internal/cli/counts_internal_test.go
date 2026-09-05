@@ -148,14 +148,131 @@ func TestPrintCountsEmptyTargetsRenderTotalsRow(t *testing.T) {
 	assert.Contains(t, got, "0 chats, 0 with matches")
 }
 
+// incrementalFixture builds a collector where chat 1 walked incrementally
+// with two prior-run cached rows plus one new match, and chat 2 walked in
+// full with five new matches.
+func incrementalFixture() (*walkCollector, []scan.Target) {
+	collector := &walkCollector{
+		items:       []store.MediaItem{{ChatID: 1}, {ChatID: 2}, {ChatID: 2}, {ChatID: 2}, {ChatID: 2}, {ChatID: 2}},
+		maxSeen:     map[int64]int64{},
+		cached:      map[int64]int64{},
+		incremental: map[int64]bool{},
+	}
+
+	collector.cached[1] = 2
+	collector.incremental[1] = true
+
+	targets := []scan.Target{
+		{Chat: filters.Chat{ID: 1, Title: "News"}},
+		{Chat: filters.Chat{ID: 2, Title: "Docs"}},
+	}
+
+	return collector, targets
+}
+
+func TestCountRowsIncludeCachedForIncrementalChats(t *testing.T) {
+	t.Parallel()
+
+	collector, targets := incrementalFixture()
+
+	rows := countRows(collector, targets)
+
+	byID := map[int64]countRow{}
+	for _, row := range rows {
+		byID[row.chatID] = row
+	}
+
+	assert.Equal(t, 3, byID[1].matches, "incremental chat sums new and cached matches")
+	assert.Equal(t, 2, byID[1].cached)
+	assert.Equal(t, 5, byID[2].matches, "full-walked chats add no cached rows")
+	assert.Zero(t, byID[2].cached)
+
+	totals := countTotalsFor(rows, true)
+	assert.Equal(t, 8, totals.files)
+	assert.Equal(t, 2, totals.cached)
+	assert.True(t, totals.incremental)
+}
+
+func TestPrintCountsJSONCarriesCachedAndIncremental(t *testing.T) {
+	t.Parallel()
+
+	cmd, out := newOutCmd()
+
+	collector, targets := incrementalFixture()
+
+	require.NoError(t, printCounts(cmd, &App{style: NewStyler(false), format: FormatJSON}, collector, targets))
+
+	var payload struct {
+		Chats []struct {
+			ChatID  int64 `json:"chat_id"`
+			Matches int   `json:"matches"`
+			Cached  int   `json:"cached"`
+		} `json:"chats"`
+		TotalMatches int  `json:"total_matches"`
+		Cached       int  `json:"cached"`
+		Incremental  bool `json:"incremental"`
+	}
+
+	require.NoError(t, json.Unmarshal(out.Bytes(), &payload))
+
+	require.Len(t, payload.Chats, 2)
+	assert.Equal(t, 5, payload.Chats[0].Matches, "full-walked chat with more matches sorts first")
+	assert.Zero(t, payload.Chats[0].Cached)
+	assert.Equal(t, 3, payload.Chats[1].Matches)
+	assert.Equal(t, 2, payload.Chats[1].Cached)
+	assert.Equal(t, 8, payload.TotalMatches)
+	assert.Equal(t, 2, payload.Cached)
+	assert.True(t, payload.Incremental)
+}
+
+func TestPrintCountsPlainCarriesCachedTotals(t *testing.T) {
+	t.Parallel()
+
+	cmd, out := newOutCmd()
+
+	collector, targets := incrementalFixture()
+
+	require.NoError(t, printCounts(cmd, &App{style: NewStyler(false), format: FormatPlain}, collector, targets))
+
+	got := out.String()
+
+	for _, want := range []string{
+		"cached: 2\n", "incremental: yes\n",
+	} {
+		assert.Contains(t, got, want)
+	}
+}
+
+func summaryCollector(files int) *walkCollector {
+	return &walkCollector{
+		items:       make([]store.MediaItem, files),
+		maxSeen:     map[int64]int64{},
+		cached:      map[int64]int64{},
+		incremental: map[int64]bool{},
+	}
+}
+
 func TestPrintScanSummaryLine(t *testing.T) {
 	t.Parallel()
 
 	cmd, errBuf := newErrCmd()
 
-	require.NoError(t, printScanSummary(cmd, &App{errStyle: NewStyler(false)}, 254, 891, 72*time.Second))
+	require.NoError(t, printScanSummary(cmd, &App{errStyle: NewStyler(false)}, 254, summaryCollector(891), 72*time.Second))
 
 	assert.Equal(t, "scanned: 254 chats, matched: 891 files, took 1m12s\n", errBuf.String())
+}
+
+func TestPrintScanSummaryAnnotatesCachedMatches(t *testing.T) {
+	t.Parallel()
+
+	cmd, errBuf := newErrCmd()
+
+	collector := summaryCollector(254)
+	collector.cached[30] = 318
+
+	require.NoError(t, printScanSummary(cmd, &App{errStyle: NewStyler(false)}, 3, collector, 2*time.Second))
+
+	assert.Equal(t, "scanned: 3 chats, matched: 572 files (+318 cached), took 2s\n", errBuf.String())
 }
 
 func TestPrintScanSummaryColoredAndSilentSuppressed(t *testing.T) {
@@ -163,7 +280,7 @@ func TestPrintScanSummaryColoredAndSilentSuppressed(t *testing.T) {
 
 	cmd, errBuf := newErrCmd()
 
-	require.NoError(t, printScanSummary(cmd, &App{errStyle: NewStyler(true)}, 3, 7, 2*time.Second))
+	require.NoError(t, printScanSummary(cmd, &App{errStyle: NewStyler(true)}, 3, summaryCollector(7), 2*time.Second))
 	assert.Contains(t, errBuf.String(), "\x1b[")
 	assert.Contains(t, errBuf.String(), "scanned:")
 	assert.Contains(t, errBuf.String(), "3 chats")
@@ -174,7 +291,7 @@ func TestPrintScanSummaryColoredAndSilentSuppressed(t *testing.T) {
 	quietBuf := &strings.Builder{}
 	silent.SetErr(quietBuf)
 
-	require.NoError(t, printScanSummary(silent, &App{}, 3, 7, time.Second))
+	require.NoError(t, printScanSummary(silent, &App{}, 3, summaryCollector(7), time.Second))
 	assert.Empty(t, quietBuf.String(), "silent mode suppresses the summary")
 }
 

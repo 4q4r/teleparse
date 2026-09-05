@@ -102,7 +102,7 @@ func TestScanProgressPTYSmoke(t *testing.T) {
 	errCmd := &cobra.Command{}
 	errCmd.SetErr(framesErrWriter{out})
 
-	if err := printScanSummary(errCmd, &App{errStyle: styler}, len(targets), len(collector.items), 72*time.Second); err != nil {
+	if err := printScanSummary(errCmd, &App{errStyle: styler}, len(targets), collector, 72*time.Second); err != nil {
 		t.Fatalf("render summary: %v", err)
 	}
 

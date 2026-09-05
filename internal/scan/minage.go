@@ -112,17 +112,28 @@ func chatHasOlderMessage(ctx context.Context, api WalkAPI, peer tg.InputPeerClas
 		return false, err //nolint:wrapcheck // caller wraps with chat context
 	}
 
+	messages, err := pageMessages(page)
+	if err != nil {
+		return false, err
+	}
+
+	return len(messages) > 0, nil
+}
+
+// pageMessages extracts the message list of any getHistory-style result
+// class; not-modified and empty pages yield no messages.
+func pageMessages(page tg.MessagesMessagesClass) ([]tg.MessageClass, error) {
 	switch messages := page.(type) {
 	case *tg.MessagesMessages:
-		return len(messages.Messages) > 0, nil
+		return messages.Messages, nil
 	case *tg.MessagesMessagesSlice:
-		return len(messages.Messages) > 0, nil
+		return messages.Messages, nil
 	case *tg.MessagesChannelMessages:
-		return len(messages.Messages) > 0, nil
+		return messages.Messages, nil
 	case *tg.MessagesMessagesNotModified:
-		return false, nil
+		return nil, nil
 	default:
-		return false, fmt.Errorf("%T: %w", page, ErrUnexpectedHistoryClass)
+		return nil, fmt.Errorf("%T: %w", page, ErrUnexpectedHistoryClass)
 	}
 }
 

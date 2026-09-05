@@ -27,10 +27,14 @@ var ErrUnknownChat = errors.New("unknown chat")
 const dialogsBatchSize = 100
 
 // Target is one resolved walk destination: the input peer to fetch history
-// from plus the context-shaped chat description.
+// from plus the context-shaped chat description. NewestID carries the
+// chat's current newest message id when the scope source knew it for free
+// (the dialogs page exposes each dialog's top message); zero means unknown
+// and a one-RPC probe must fill the gap before history-clear detection.
 type Target struct {
 	InputPeer tg.InputPeerClass
 	Chat      filters.Chat
+	NewestID  int64
 }
 
 // ScopeAPI is the raw resolution surface scope resolution needs; the
@@ -134,7 +138,9 @@ func (r *ScopeResolver) resolveAll(ctx context.Context, opts filters.Options, se
 			return nil
 		}
 
-		targets = append(targets, dedupe(seen, Target{InputPeer: inputPeer, Chat: chat})...)
+		targets = append(targets, dedupe(seen, Target{
+			InputPeer: inputPeer, Chat: chat, NewestID: int64(dialog.TopMessage),
+		})...)
 
 		return nil
 	})
@@ -196,7 +202,9 @@ func (r *ScopeResolver) resolveByID(ctx context.Context, id int64, seen map[int6
 			return nil
 		}
 
-		found = append(found, Target{InputPeer: inputPeer, Chat: chat})
+		found = append(found, Target{
+			InputPeer: inputPeer, Chat: chat, NewestID: int64(dialog.TopMessage),
+		})
 
 		return nil
 	})
