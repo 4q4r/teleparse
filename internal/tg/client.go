@@ -87,6 +87,20 @@ func Run(
 	paths *config.Paths,
 	run func(ctx context.Context, client *telegram.Client) error,
 ) error {
+	return RunWithUpdates(ctx, account, cfg, paths, nil, run)
+}
+
+// RunWithUpdates is Run with a Telegram update handler attached to the client
+// (QR login feeds its UpdateLoginToken approval signal through one); a nil
+// handler keeps gotd's default no-updates mode.
+func RunWithUpdates(
+	ctx context.Context,
+	account string,
+	cfg *config.Config,
+	paths *config.Paths,
+	handler telegram.UpdateHandler,
+	run func(ctx context.Context, client *telegram.Client) error,
+) error {
 	apiID, apiHash, err := CredsFromEnv()
 	if err != nil {
 		return err
@@ -125,6 +139,7 @@ func Run(
 		Resolver:       resolver,
 		Middlewares:    BuildMiddlewares(cfg.Pacing),
 		Device:         device,
+		UpdateHandler:  handler,
 	})
 
 	if err := client.Run(ctx, func(ctx context.Context) error {

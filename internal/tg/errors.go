@@ -23,6 +23,9 @@ var (
 	ErrTelethonMissing   = errors.New("telethon session file not found")
 	ErrTelethonSchema    = errors.New("not a telethon session database")
 	ErrDeviceCorrupt     = errors.New("stored device profile is corrupt")
+	ErrQRTimeout         = errors.New("QR login timed out, no device approved")
+	ErrTDesktopMissing   = errors.New("tdata directory not found")
+	ErrTDesktopEmpty     = errors.New("no accounts found in tdata directory")
 )
 
 // Chat type vocabulary used across dialogs, filters and output.
