@@ -36,10 +36,14 @@ type loginPlan struct {
 	TDataDir     string
 }
 
+// maxMenuAttempts bounds how many times an invalid menu choice re-asks.
+const maxMenuAttempts = 3
+
 // resolveLoginMethod decides how this login runs: explicit flags win and
 // skip the menu entirely; with no flags and an interactive terminal the
-// user picks a method from menu (default phone); non-interactive sessions
-// fall back to the phone flow so scripted logins keep working.
+// user picks a method from menu (default phone, invalid choices re-ask up
+// to maxMenuAttempts times); non-interactive sessions fall back to the
+// phone flow so scripted logins keep working.
 func resolveLoginMethod(menu string, qr bool, phone, telethon, tdata string, interactive bool,
 	ask func(string) (string, error),
 ) (loginPlan, error) {
@@ -50,16 +54,28 @@ func resolveLoginMethod(menu string, qr bool, phone, telethon, tdata string, int
 		return plan, nil
 	}
 
-	answer, err := ask(menu)
-	if err != nil {
-		return loginPlan{}, fmt.Errorf("read login method: %w", err)
+	prompt := menu
+
+	for range maxMenuAttempts {
+		answer, err := ask(prompt)
+		if err != nil {
+			return loginPlan{}, fmt.Errorf("read login method: %w", err)
+		}
+
+		if err := plan.applyChoice(answer, ask); err != nil {
+			if !errors.Is(err, errBadLoginChoice) {
+				return loginPlan{}, err
+			}
+
+			prompt = "unknown login method choice (1-4), try again\n" + menu
+
+			continue
+		}
+
+		return plan, nil
 	}
 
-	if err := plan.applyChoice(answer, ask); err != nil {
-		return loginPlan{}, err
-	}
-
-	return plan, nil
+	return loginPlan{}, fmt.Errorf("%d invalid choices: %w", maxMenuAttempts, errBadLoginChoice)
 }
 
 func (p *loginPlan) applyChoice(choice string, ask func(string) (string, error)) error {
