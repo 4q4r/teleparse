@@ -463,7 +463,7 @@ func TestPrintPlanCountsSummary(t *testing.T) {
 	targets := []scan.Target{{Chat: filters.Chat{ID: 1, Title: "News"}}}
 
 	cmd, buf = newOutCmd()
-	require.NoError(t, printCounts(cmd, &App{style: NewStyler(false)}, collector, targets))
+	require.NoError(t, printCounts(cmd, &App{style: NewStyler(false)}, collector, targets, 0))
 	assert.Contains(t, buf.String(), "MATCHES")
 	assert.Contains(t, buf.String(), "News")
 	assert.Contains(t, buf.String(), "TOTAL")

@@ -48,7 +48,7 @@ func TestCachedMatchedExcludesFailedRows(t *testing.T) {
 	}
 
 	for idx := range rows {
-		require.NoError(t, st.UpsertMedia(ctx, &rows[idx]))
+		require.NoError(t, func() error { _, err := st.UpsertMedia(ctx, &rows[idx]); return err }())
 	}
 
 	cached, err := st.CachedMatched(ctx, 7)
@@ -80,7 +80,7 @@ func TestPendingMediaReturnsUndownloadedRows(t *testing.T) {
 	}
 
 	for idx := range rows {
-		require.NoError(t, st.UpsertMedia(ctx, &rows[idx]))
+		require.NoError(t, func() error { _, err := st.UpsertMedia(ctx, &rows[idx]); return err }())
 	}
 
 	pending, err := st.PendingMedia(ctx, 7)

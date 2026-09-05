@@ -38,7 +38,7 @@ func TestPrintCountsTableSortedWithTotal(t *testing.T) {
 
 	collector, targets := newCountsFixture()
 
-	require.NoError(t, printCounts(cmd, &App{style: NewStyler(false)}, collector, targets))
+	require.NoError(t, printCounts(cmd, &App{style: NewStyler(false)}, collector, targets, 0))
 
 	got := out.String()
 	lines := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
@@ -66,7 +66,7 @@ func TestPrintCountsTableColoredWhenStylerEnabled(t *testing.T) {
 
 	collector, targets := newCountsFixture()
 
-	require.NoError(t, printCounts(cmd, &App{style: NewStyler(true)}, collector, targets))
+	require.NoError(t, printCounts(cmd, &App{style: NewStyler(true)}, collector, targets, 0))
 
 	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
 	require.Len(t, lines, 5)
@@ -88,7 +88,7 @@ func TestPrintCountsJSON(t *testing.T) {
 
 	collector, targets := newCountsFixture()
 
-	require.NoError(t, printCounts(cmd, &App{style: NewStyler(false), format: FormatJSON}, collector, targets))
+	require.NoError(t, printCounts(cmd, &App{style: NewStyler(false), format: FormatJSON}, collector, targets, 0))
 
 	var payload struct {
 		Chats []struct {
@@ -99,6 +99,7 @@ func TestPrintCountsJSON(t *testing.T) {
 		TotalChats       int `json:"total_chats"`
 		ChatsWithMatches int `json:"chats_with_matches"`
 		TotalMatches     int `json:"total_matches"`
+		Duplicates       int `json:"duplicates"`
 	}
 
 	require.NoError(t, json.Unmarshal(out.Bytes(), &payload))
@@ -111,6 +112,7 @@ func TestPrintCountsJSON(t *testing.T) {
 	assert.Equal(t, 3, payload.TotalChats)
 	assert.Equal(t, 2, payload.ChatsWithMatches)
 	assert.Equal(t, 7, payload.TotalMatches)
+	assert.Zero(t, payload.Duplicates, "the totals object always carries duplicates")
 }
 
 func TestPrintCountsPlain(t *testing.T) {
@@ -120,7 +122,7 @@ func TestPrintCountsPlain(t *testing.T) {
 
 	collector, targets := newCountsFixture()
 
-	require.NoError(t, printCounts(cmd, &App{style: NewStyler(false), format: FormatPlain}, collector, targets))
+	require.NoError(t, printCounts(cmd, &App{style: NewStyler(false), format: FormatPlain}, collector, targets, 0))
 
 	got := out.String()
 
@@ -129,7 +131,7 @@ func TestPrintCountsPlain(t *testing.T) {
 
 	for _, want := range []string{
 		"chat_id: 3\n", "title: Docs\n", "matches: 5\n",
-		"total_chats: 3\n", "chats_with_matches: 2\n", "total_matches: 7\n",
+		"total_chats: 3\n", "chats_with_matches: 2\n", "total_matches: 7\n", "duplicates: 0\n",
 	} {
 		assert.Contains(t, got, want)
 	}
@@ -140,7 +142,7 @@ func TestPrintCountsEmptyTargetsRenderTotalsRow(t *testing.T) {
 
 	cmd, out := newOutCmd()
 
-	require.NoError(t, printCounts(cmd, &App{style: NewStyler(false)}, &walkCollector{}, nil))
+	require.NoError(t, printCounts(cmd, &App{style: NewStyler(false)}, &walkCollector{}, nil, 0))
 
 	got := out.String()
 	assert.Contains(t, got, "CHAT")
@@ -187,7 +189,7 @@ func TestCountRowsIncludeCachedForIncrementalChats(t *testing.T) {
 	assert.Equal(t, 5, byID[2].matches, "full-walked chats add no cached rows")
 	assert.Zero(t, byID[2].cached)
 
-	totals := countTotalsFor(rows, true)
+	totals := countTotalsFor(rows, 0, true)
 	assert.Equal(t, 8, totals.files)
 	assert.Equal(t, 2, totals.cached)
 	assert.True(t, totals.incremental)
@@ -200,7 +202,7 @@ func TestPrintCountsJSONCarriesCachedAndIncremental(t *testing.T) {
 
 	collector, targets := incrementalFixture()
 
-	require.NoError(t, printCounts(cmd, &App{style: NewStyler(false), format: FormatJSON}, collector, targets))
+	require.NoError(t, printCounts(cmd, &App{style: NewStyler(false), format: FormatJSON}, collector, targets, 0))
 
 	var payload struct {
 		Chats []struct {
@@ -232,7 +234,7 @@ func TestPrintCountsPlainCarriesCachedTotals(t *testing.T) {
 
 	collector, targets := incrementalFixture()
 
-	require.NoError(t, printCounts(cmd, &App{style: NewStyler(false), format: FormatPlain}, collector, targets))
+	require.NoError(t, printCounts(cmd, &App{style: NewStyler(false), format: FormatPlain}, collector, targets, 0))
 
 	got := out.String()
 
@@ -257,7 +259,7 @@ func TestPrintScanSummaryLine(t *testing.T) {
 
 	cmd, errBuf := newErrCmd()
 
-	require.NoError(t, printScanSummary(cmd, &App{errStyle: NewStyler(false)}, 254, summaryCollector(891), 72*time.Second))
+	require.NoError(t, printScanSummary(cmd, &App{errStyle: NewStyler(false)}, 254, summaryCollector(891), 0, 72*time.Second))
 
 	assert.Equal(t, "scanned: 254 chats, matched: 891 files, took 1m12s\n", errBuf.String())
 }
@@ -270,7 +272,7 @@ func TestPrintScanSummaryAnnotatesCachedMatches(t *testing.T) {
 	collector := summaryCollector(254)
 	collector.cached[30] = 318
 
-	require.NoError(t, printScanSummary(cmd, &App{errStyle: NewStyler(false)}, 3, collector, 2*time.Second))
+	require.NoError(t, printScanSummary(cmd, &App{errStyle: NewStyler(false)}, 3, collector, 0, 2*time.Second))
 
 	assert.Equal(t, "scanned: 3 chats, matched: 572 files (+318 cached), took 2s\n", errBuf.String())
 }
@@ -280,7 +282,7 @@ func TestPrintScanSummaryColoredAndSilentSuppressed(t *testing.T) {
 
 	cmd, errBuf := newErrCmd()
 
-	require.NoError(t, printScanSummary(cmd, &App{errStyle: NewStyler(true)}, 3, summaryCollector(7), 2*time.Second))
+	require.NoError(t, printScanSummary(cmd, &App{errStyle: NewStyler(true)}, 3, summaryCollector(7), 0, 2*time.Second))
 	assert.Contains(t, errBuf.String(), "\x1b[")
 	assert.Contains(t, errBuf.String(), "scanned:")
 	assert.Contains(t, errBuf.String(), "3 chats")
@@ -291,8 +293,83 @@ func TestPrintScanSummaryColoredAndSilentSuppressed(t *testing.T) {
 	quietBuf := &strings.Builder{}
 	silent.SetErr(quietBuf)
 
-	require.NoError(t, printScanSummary(silent, &App{}, 3, summaryCollector(7), time.Second))
+	require.NoError(t, printScanSummary(silent, &App{}, 3, summaryCollector(7), 0, time.Second))
 	assert.Empty(t, quietBuf.String(), "silent mode suppresses the summary")
+}
+
+func TestChatLabelBlankFallsBackToID(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "News", chatLabel(1, "News"))
+	assert.Equal(t, "chat_2", chatLabel(2, ""))
+	assert.Equal(t, "chat_3", chatLabel(3, "   "))
+	assert.Equal(t, "chat_4", chatLabel(4, "\t"))
+}
+
+// TestPrintCountsBlankTitleRendersChatID pins the counts surfaces against
+// the empty-name regression: chats with blank titles render chat_<id>,
+// never an empty cell.
+func TestPrintCountsBlankTitleRendersChatID(t *testing.T) {
+	t.Parallel()
+
+	collector := &walkCollector{items: []store.MediaItem{{ChatID: 2}, {ChatID: 2}}}
+	targets := []scan.Target{
+		{Chat: filters.Chat{ID: 1, Title: "News"}},
+		{Chat: filters.Chat{ID: 2, Title: ""}},
+		{Chat: filters.Chat{ID: 3, Title: "   "}},
+	}
+
+	cmd, out := newOutCmd()
+	require.NoError(t, printCounts(cmd, &App{style: NewStyler(false)}, collector, targets, 0))
+	assert.Contains(t, out.String(), "chat_2")
+	assert.Contains(t, out.String(), "chat_3")
+
+	jsonCmd, jsonOut := newOutCmd()
+	require.NoError(t, printCounts(jsonCmd, &App{style: NewStyler(false), format: FormatJSON}, collector, targets, 0))
+
+	var payload struct {
+		Chats []struct {
+			ChatID int64  `json:"chat_id"`
+			Title  string `json:"title"`
+		} `json:"chats"`
+	}
+
+	require.NoError(t, json.Unmarshal(jsonOut.Bytes(), &payload))
+	require.Len(t, payload.Chats, 3)
+
+	for _, chat := range payload.Chats {
+		assert.NotEmpty(t, chat.Title, "chat %d must never render an empty title", chat.ChatID)
+	}
+
+	assert.Equal(t, "chat_2", payload.Chats[0].Title, "sorted by matches desc")
+	assert.Equal(t, "News", payload.Chats[1].Title, "zero-match chats follow by chat id")
+	assert.Equal(t, "chat_3", payload.Chats[2].Title)
+}
+
+// TestPrintCountsTotalsSurfaceDuplicates verifies the duplicate counter in
+// every format: table TOTAL label, json totals object and plain pairs.
+func TestPrintCountsTotalsSurfaceDuplicates(t *testing.T) {
+	t.Parallel()
+
+	collector, targets := newCountsFixture()
+
+	cmd, out := newOutCmd()
+	require.NoError(t, printCounts(cmd, &App{style: NewStyler(false)}, collector, targets, 3))
+	assert.Contains(t, out.String(), "2 with matches, 3 duplicates")
+
+	jsonCmd, jsonOut := newOutCmd()
+	require.NoError(t, printCounts(jsonCmd, &App{style: NewStyler(false), format: FormatJSON}, collector, targets, 3))
+
+	var payload struct {
+		Duplicates int `json:"duplicates"`
+	}
+
+	require.NoError(t, json.Unmarshal(jsonOut.Bytes(), &payload))
+	assert.Equal(t, 3, payload.Duplicates)
+
+	plainCmd, plainOut := newOutCmd()
+	require.NoError(t, printCounts(plainCmd, &App{style: NewStyler(false), format: FormatPlain}, collector, targets, 3))
+	assert.Contains(t, plainOut.String(), "duplicates: 3\n")
 }
 
 func TestStylersForSplitsStdoutAndStderrSinks(t *testing.T) {

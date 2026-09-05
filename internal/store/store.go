@@ -18,9 +18,6 @@ const busyTimeoutMs = 5000
 
 // Sentinel errors wrapped by dynamic Store failures.
 var (
-	// ErrDuplicateFile reports that a different message already tracks the
-	// same unique media file id.
-	ErrDuplicateFile = errors.New("file already tracked under another message")
 	// ErrSchemaAhead reports a database written by a newer teleparse build.
 	ErrSchemaAhead = errors.New("database schema is newer than this build")
 )

@@ -241,7 +241,7 @@ func TestWalkTargetStashesCachedMatchedCount(t *testing.T) {
 			ChatID: 30, MessageID: id, MediaClass: "photo", MediaID: id,
 			Status: store.StatusDone,
 		}
-		require.NoError(t, state.UpsertMedia(ctx, &item))
+		require.NoError(t, func() error { _, err := state.UpsertMedia(ctx, &item); return err }())
 	}
 
 	api := &fakeHistoryAPI{}
@@ -296,7 +296,7 @@ func TestWithCachedPendingMergesManifestRows(t *testing.T) {
 	}
 
 	for idx := range rows {
-		require.NoError(t, state.UpsertMedia(ctx, &rows[idx]))
+		require.NoError(t, func() error { _, err := state.UpsertMedia(ctx, &rows[idx]); return err }())
 	}
 
 	app := &App{cfg: config.Default(), paths: &config.Paths{Downloads: t.TempDir()}}
