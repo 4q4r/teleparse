@@ -198,6 +198,7 @@ Families (AND-composed; every flag has a config-key twin):
 | Engagement | `--is-reply` · `--min-views` · `--min-forwards` · `--min-reactions` · `--reaction 🔥` · `--pinned` |
 | Chat | `--chat-type private,group,supergroup,channel,forum` · `--exclude-chat-type channel` · `--chat-glob 'News*'` · `--chat-regex` · `--archived only` · `--saved` · `--chat-username` · `--chat-deleted=true` · `--skip-protected` |
 | Sender | `--sender-contacts` · `--sender-non-contacts` (inverse) · `--sender-mutual` · `--sender-non-mutual` (inverse) · `--from-me` · `--from @user,123,+15551234567` (ids \| @usernames \| phone numbers) · `--exclude` (same syntax) · `--sender-bot/premium/verified/scam/deleted` · `--sender-name-regex` |
+| Chat age | `--chat-min-age 1y` (chats with messages older than the cutoff; one probe RPC per chat — private chats expose no creation date) |
 | IDs & misc | `--min-id/--max-id` · `--service only` · `--silent` · `--spoiler` |
 | Execution | `--limit` (scan budget) · `--reverse` · `--dedupe unique-id\|hash\|off` · `--skip-existing` · `--recurse-topics` · `--follow-replies N` · `--albums expand\|first\|skip` |
 
