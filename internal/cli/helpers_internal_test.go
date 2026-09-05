@@ -34,26 +34,31 @@ func newOutCmd() (*cobra.Command, *bytes.Buffer) {
 }
 
 // fakeRefetchAPI canned-answers the two message-fetch surfaces the resolver
-// refetch path needs, tracking which one was used.
+// refetch path needs, tracking which one was used and recording every
+// request for assertion.
 type fakeRefetchAPI struct {
 	usedChannel bool
 	usedUser    bool
 	messages    tg.MessagesMessagesClass
 	err         error
+	channelReqs []*tg.ChannelsGetMessagesRequest
+	userReqs    []tg.InputMessageClass
 }
 
 func (f *fakeRefetchAPI) MessagesGetMessages( //nolint:ireturn // the gotd union is the refetchAPI contract
-	_ context.Context, _ []tg.InputMessageClass,
+	_ context.Context, ids []tg.InputMessageClass,
 ) (tg.MessagesMessagesClass, error) {
 	f.usedUser = true
+	f.userReqs = append(f.userReqs, ids...)
 
 	return f.messages, f.err
 }
 
 func (f *fakeRefetchAPI) ChannelsGetMessages( //nolint:ireturn // the gotd union is the refetchAPI contract
-	_ context.Context, _ *tg.ChannelsGetMessagesRequest,
+	_ context.Context, request *tg.ChannelsGetMessagesRequest,
 ) (tg.MessagesMessagesClass, error) {
 	f.usedChannel = true
+	f.channelReqs = append(f.channelReqs, request)
 
 	return f.messages, f.err
 }
@@ -63,9 +68,9 @@ func TestMessageCacheEvictsInInsertionOrder(t *testing.T) {
 
 	cache := newMessageCache(2)
 
-	first := walkedMessage{fctx: filters.Context{Chat: filters.Chat{ID: 1}}}
-	second := walkedMessage{fctx: filters.Context{Chat: filters.Chat{ID: 2}}}
-	third := walkedMessage{fctx: filters.Context{Chat: filters.Chat{ID: 3}}}
+	first := walkedMessage{fctx: &filters.Context{Chat: filters.Chat{ID: 1}}}
+	second := walkedMessage{fctx: &filters.Context{Chat: filters.Chat{ID: 2}}}
+	third := walkedMessage{fctx: &filters.Context{Chat: filters.Chat{ID: 3}}}
 
 	cache.put(msgCacheKey{chatID: 1, msgID: 10}, first)
 	cache.put(msgCacheKey{chatID: 2, msgID: 20}, second)
@@ -244,7 +249,7 @@ func TestRunResolverResolveCacheHitAndMiss(t *testing.T) {
 	}
 
 	resolver.cache.put(msgCacheKey{chatID: 7, msgID: 100}, walkedMessage{
-		fctx: fctx,
+		fctx: &fctx,
 		msg: &tg.Message{Media: &tg.MessageMediaDocument{Document: &tg.Document{
 			ID: 777, AccessHash: 1, FileReference: []byte("r"),
 		}}},
@@ -343,7 +348,7 @@ func TestRunResolverRefetchPaths(t *testing.T) {
 
 	_, err = emptyResolved.Refetch(t.Context())
 	require.Error(t, err)
-	require.ErrorIs(t, err, errMessageNotReturned)
+	require.ErrorIs(t, err, download.ErrMessageGone)
 
 	broken := errors.New("rpc unavailable")
 
