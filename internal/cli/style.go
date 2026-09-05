@@ -5,9 +5,11 @@ import (
 )
 
 // StyleOptions collects the inputs of the color decision. Colors survive
-// only when stdout is a terminal and none of --no-color, --no-ascii or
-// NO_COLOR asked for plain output (--no-ascii implies plain: the systemd
-// and docker scenarios want zero control sequences).
+// only when the output sink is a terminal and none of --no-color,
+// --no-ascii or NO_COLOR asked for plain output (--no-ascii implies
+// plain: the systemd and docker scenarios want zero control sequences).
+// IsTTY refers to whichever sink the caller renders to: stdout stylers
+// check stdout, stderr stylers check stderr.
 type StyleOptions struct {
 	NoColorFlag bool
 	NoASCIIFlag bool
@@ -20,6 +22,19 @@ func (o StyleOptions) Enabled() bool {
 	return o.IsTTY && !o.NoColorFlag && !o.NoASCIIFlag && !o.NoColorEnv
 }
 
+// stylersFor resolves the stdout- and stderr-bound stylers from one flag
+// matrix; each sink checks its own terminal so stderr progress lines keep
+// their colors even when stdout is piped into --format json.
+func stylersFor(base StyleOptions, stdoutTTY, stderrTTY bool) (Styler, Styler) {
+	outOpts := base
+	outOpts.IsTTY = stdoutTTY
+
+	errOpts := base
+	errOpts.IsTTY = stderrTTY
+
+	return NewStyler(outOpts.Enabled()), NewStyler(errOpts.Enabled())
+}
+
 // Styler renders colored CLI fragments. The zero value (and every Styler
 // built disabled) passes text through unchanged, so tests and pipes see
 // plain output; an enabled Styler wraps text in ANSI colors. Styles are
@@ -30,6 +45,7 @@ type Styler struct {
 	ok      lipgloss.Style
 	warn    lipgloss.Style
 	dim     lipgloss.Style
+	bold    lipgloss.Style
 }
 
 // NewStyler builds a Styler; disabled stylers render plain text.
@@ -44,6 +60,7 @@ func NewStyler(enabled bool) Styler {
 		ok:      lipgloss.NewStyle().Foreground(lipgloss.Green),
 		warn:    lipgloss.NewStyle().Foreground(lipgloss.Yellow),
 		dim:     lipgloss.NewStyle().Faint(true),
+		bold:    lipgloss.NewStyle().Bold(true),
 	}
 }
 
@@ -75,6 +92,11 @@ func (s Styler) Warning(text string) string {
 // Dim renders de-emphasized fragments (hints, sources, SKIP).
 func (s Styler) Dim(text string) string {
 	return s.dim.Render(text)
+}
+
+// Bold renders emphasized fragments (the counts TOTAL row).
+func (s Styler) Bold(text string) string {
+	return s.bold.Render(text)
 }
 
 // doctorBadge renders a doctor check status word with its semantic color:

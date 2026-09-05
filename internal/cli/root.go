@@ -38,12 +38,13 @@ func effectiveVersion() string {
 
 // App carries shared state across commands.
 type App struct {
-	cfg     *config.Config
-	paths   *config.Paths
-	format  OutputFormat
-	noASCII bool
-	style   Styler
-	root    *cobra.Command
+	cfg      *config.Config
+	paths    *config.Paths
+	format   OutputFormat
+	noASCII  bool
+	style    Styler
+	errStyle Styler
+	root     *cobra.Command
 }
 
 // outputFormat reports the effective --format value (validated once in
@@ -137,12 +138,16 @@ func newApp() *App {
 			app.noASCII, _ = cmd.Flags().GetBool("no-ascii")
 
 			noColor, _ := cmd.Flags().GetBool("no-color")
-			app.style = NewStyler(StyleOptions{
+
+			base := StyleOptions{
 				NoColorFlag: noColor,
 				NoASCIIFlag: app.noASCII,
 				NoColorEnv:  os.Getenv("NO_COLOR") != "",
-				IsTTY:       term.IsTerminal(int(os.Stdout.Fd())),
-			}.Enabled())
+			}
+
+			app.style, app.errStyle = stylersFor(base,
+				term.IsTerminal(int(os.Stdout.Fd())),
+				term.IsTerminal(int(os.Stderr.Fd())))
 
 			return nil
 		},
