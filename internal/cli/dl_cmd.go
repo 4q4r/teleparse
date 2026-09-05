@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"reflect"
@@ -40,6 +41,7 @@ type dlRunFlags struct {
 	explain   bool
 	countOnly bool
 	takeout   bool
+	noTakeout bool
 }
 
 // runMode tunes the shared pipeline: dry-run previews, count-only output
@@ -88,6 +90,7 @@ func dlCmd(app *App) *cobra.Command {
 		"print which filters push down to the server vs run client-side, then proceed")
 	cmd.Flags().BoolVar(&flags.countOnly, "count-only", false, "only print per-chat match counts")
 	cmd.Flags().BoolVar(&flags.takeout, "takeout", false, "wrap session in takeout mode (lower flood limits)")
+	cmd.Flags().BoolVar(&flags.noTakeout, "no-takeout", false, "never use takeout mode, even if auto would engage")
 	cmd.Flags().String("profile", "", "named filter profile overlay")
 	addSilentOutputMirror(cmd)
 	addFilterFlags(cmd, &filterSet)
@@ -166,6 +169,10 @@ func runDownloadCommand(app *App, cmd *cobra.Command, specs []string, filterSet 
 		return fail(cmd, err)
 	}
 
+	if flags.takeout && flags.noTakeout {
+		return fail(cmd, errTakeoutExclusive)
+	}
+
 	for _, account := range accounts {
 		cfg := *app.cfg
 		cfg.Auth.Account = account
@@ -174,7 +181,17 @@ func runDownloadCommand(app *App, cmd *cobra.Command, specs []string, filterSet 
 			ctx context.Context,
 			client *telegram.Client,
 		) error {
-			return withAPI(ctx, client, flags.takeout || cfg.Net.Takeout, func(
+			takeoutMode, reason := resolveTakeoutModeFor(flags, &cfg, specs,
+				func() (int, error) { return tg.DialogCount(ctx, client) })
+
+			if takeoutMode && !app.silentMode(cmd) {
+				if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s\n", app.errStyle.Dim("takeout: engaged ("+reason+
+					") - export rate limits apply; the export session finishes when the run ends")); err != nil {
+					return fmt.Errorf("print takeout notice: %w", err)
+				}
+			}
+
+			return withAPI(ctx, client, takeoutMode, func(
 				ctx context.Context,
 				api *tgapi.Client,
 			) error {
@@ -852,3 +869,61 @@ func minAgeProgressReporter(cmd *cobra.Command, app *App, label string, total in
 
 // minAgeProgressChunk is the non-terminal progress reporting interval.
 const minAgeProgressChunk = 25
+
+// errTakeoutExclusive rejects combining --takeout with --no-takeout.
+var errTakeoutExclusive = errors.New("--takeout and --no-takeout are mutually exclusive")
+
+// resolveTakeoutModeFor decides whether this run rides a takeout session:
+// explicit flags win, config takeout forces always, otherwise the auto
+// heuristic engages when the estimated scope looks large. The probe is
+// fail-soft: on error auto is skipped, never blocking the run.
+func resolveTakeoutModeFor(
+	flags dlRunFlags,
+	cfg *config.Config,
+	specs []string,
+	probe func() (int, error),
+) (bool, string) {
+	switch {
+	case flags.takeout:
+		return true, "forced by --takeout"
+	case flags.noTakeout:
+		return false, "disabled by --no-takeout"
+	case cfg.Net.Takeout:
+		return true, "net.takeout = true"
+	case !cfg.Net.TakeoutAuto:
+		return false, "net.takeout_auto = false"
+	}
+
+	dialogs, err := probe()
+	if err != nil {
+		return false, "dialog count probe failed, auto skipped"
+	}
+
+	estimate := estimateScopeSize(specs, dialogs)
+
+	if estimate >= cfg.Net.TakeoutAutoMinChats {
+		return true, fmt.Sprintf("auto: ~%d chats >= %d", estimate, cfg.Net.TakeoutAutoMinChats)
+	}
+
+	return false, fmt.Sprintf("auto: ~%d chats < %d", estimate, cfg.Net.TakeoutAutoMinChats)
+}
+
+// estimateScopeSize approximates how many chats a scan will walk: "all"
+// and title globs imply the whole dialog set, explicit specs count one
+// chat each.
+func estimateScopeSize(specs []string, dialogs int) int {
+	estimate := 0
+
+	for _, spec := range specs {
+		switch {
+		case spec == "all":
+			return dialogs
+		case strings.ContainsAny(spec, "*?["):
+			return dialogs
+		default:
+			estimate++
+		}
+	}
+
+	return estimate
+}
