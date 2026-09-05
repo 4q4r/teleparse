@@ -103,8 +103,8 @@ func (s *scanState) eta() (time.Duration, bool) {
 }
 
 // lines renders the live block: a head line with counters, elapsed time
-// and the ETA, plus the last scanTrailLen completed chats (newest last).
-// The ETA segment disappears once the walk finishes.
+// and the ETA, plus a one-line summary of the last scanTrailLen completed
+// chats (newest last). The ETA segment disappears once the walk finishes.
 func (s *scanState) lines(styler Styler) []string {
 	head := []string{
 		styler.Dim("scanning") + " " + styler.Success(s.progressText()),
@@ -118,11 +118,10 @@ func (s *scanState) lines(styler Styler) []string {
 		head = append(head, styler.Dim("ETA")+" --")
 	}
 
-	out := make([]string, 0, 1+len(s.trail))
-	out = append(out, strings.Join(head, "  "))
+	out := []string{strings.Join(head, "  ")}
 
-	for idx, entry := range s.trail {
-		out = append(out, s.trailLine(styler, entry, idx == len(s.trail)-1))
+	if summary, ok := s.trailSummary(styler); ok {
+		out = append(out, summary)
 	}
 
 	return out
@@ -133,16 +132,22 @@ func (s *scanState) progressText() string {
 	return strconv.Itoa(s.done) + "/" + strconv.Itoa(s.total)
 }
 
-// trailLine renders one trail entry: an ASCII tree prefix, the truncated
-// title and the green match count.
-func (s *scanState) trailLine(styler Styler, entry scanTrailEntry, newest bool) string {
-	prefix := "|- "
-	if newest {
-		prefix = "`- "
+// trailSummary renders the recent-chats line: a dim "last chats" label
+// followed by "Title (N)" entries, newest last — self-explanatory without
+// tree-drawing glyphs.
+func (s *scanState) trailSummary(styler Styler) (string, bool) {
+	if len(s.trail) == 0 {
+		return "", false
 	}
 
-	return styler.Dim(prefix) + truncateScanTitle(entry.title) + ": " +
-		styler.Success(strconv.Itoa(entry.matches)+" matches")
+	parts := make([]string, 0, len(s.trail))
+
+	for _, entry := range s.trail {
+		parts = append(parts, truncateScanTitle(entry.title)+" ("+
+			styler.Success(strconv.Itoa(entry.matches))+")")
+	}
+
+	return styler.Dim("last chats:") + " " + strings.Join(parts, ", "), true
 }
 
 // Live scan messages: each completed walk becomes one immutable message
