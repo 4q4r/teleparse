@@ -42,14 +42,17 @@ type dlRunFlags struct {
 	countOnly bool
 	takeout   bool
 	noTakeout bool
+	full      bool
 }
 
-// runMode tunes the shared pipeline: dry-run previews, count-only output
-// and sync-mode watermarks.
+// runMode tunes the shared pipeline: dry-run previews, count-only output,
+// sync-mode watermarks and incremental (watermark-cached) walks.
 type runMode struct {
-	dryRun    bool
-	countOnly bool
-	syncMode  bool
+	dryRun      bool
+	countOnly   bool
+	syncMode    bool
+	incremental bool
+	fullWalk    bool
 }
 
 // runPayload is the TOML envelope persisted in runs.filter_json: the chat
@@ -63,6 +66,18 @@ type runPayload struct {
 // keep the go-toml squash tag on an exported field.
 type teleparseOptionsEmbed struct {
 	Options filters.Options `toml:",squash"`
+}
+
+// addFullWalkFlag registers the shared --full opt-out of incremental walks.
+func addFullWalkFlag(cmd *cobra.Command, flags *dlRunFlags) {
+	cmd.Flags().BoolVar(&flags.full, "full", false,
+		"force a full re-walk of every chat (ignore cached watermarks; overrides scan.incremental)")
+}
+
+// incrementalMode resolves whether this run walks incrementally: config
+// default (on) unless --full forces a complete pass.
+func incrementalMode(cfg *config.Config, flags dlRunFlags) bool {
+	return cfg.Scan.Incremental && !flags.full
 }
 
 func dlCmd(app *App) *cobra.Command {
@@ -80,8 +95,10 @@ func dlCmd(app *App) *cobra.Command {
 		Args: cobra.ArbitraryArgs,
 		RunE: func(c *cobra.Command, args []string) error {
 			return runDownloadCommand(app, c, args, &filterSet, flags, runMode{
-				dryRun:    flags.dryRun,
-				countOnly: flags.countOnly,
+				dryRun:      flags.dryRun,
+				countOnly:   flags.countOnly,
+				incremental: incrementalMode(app.cfg, flags),
+				fullWalk:    flags.full,
 			}, "")
 		},
 	}
@@ -91,6 +108,7 @@ func dlCmd(app *App) *cobra.Command {
 	cmd.Flags().BoolVar(&flags.countOnly, "count-only", false, "only print per-chat match counts")
 	cmd.Flags().BoolVar(&flags.takeout, "takeout", false, "wrap session in takeout mode (lower flood limits)")
 	cmd.Flags().BoolVar(&flags.noTakeout, "no-takeout", false, "never use takeout mode, even if auto would engage")
+	addFullWalkFlag(cmd, &flags)
 	cmd.Flags().String("profile", "", "named filter profile overlay")
 	addSilentOutputMirror(cmd)
 	addFilterFlags(cmd, &filterSet)
@@ -119,12 +137,17 @@ func scanCmd(app *App) *cobra.Command {
 		Example: "  teleparse scan @durov --media video --count-only\n  teleparse scan all --chat-glob 'News*' --explain",
 		Args:    cobra.ArbitraryArgs,
 		RunE: func(c *cobra.Command, args []string) error {
-			return runDownloadCommand(app, c, args, &filterSet, flags, runMode{dryRun: true}, "")
+			return runDownloadCommand(app, c, args, &filterSet, flags, runMode{
+				dryRun:      true,
+				incremental: incrementalMode(app.cfg, flags),
+				fullWalk:    flags.full,
+			}, "")
 		},
 	}
 	cmd.Flags().BoolVar(&flags.explain, "explain", false,
 		"print which filters push down to the server vs run client-side, then proceed")
 	cmd.Flags().BoolVar(&flags.countOnly, "count-only", false, "only print per-chat match counts")
+	addFullWalkFlag(cmd, &flags)
 	addSilentOutputMirror(cmd)
 	addFilterFlags(cmd, &filterSet)
 
@@ -341,7 +364,7 @@ func executeRun(ctx context.Context, cmd *cobra.Command, app *App, account, prof
 
 		progress.chatStart(chatLabel(target.Chat.ID, target.Chat.Title))
 
-		if err := walkTarget(ctx, state, api, target, plan, opts, mode, collector); err != nil {
+		if err := walkTarget(ctx, state, api, target, plan, opts, mode, collector, progress); err != nil {
 			progress.close()
 
 			return finishRunE(ctx, state, runID, err)
@@ -356,30 +379,46 @@ func executeRun(ctx context.Context, cmd *cobra.Command, app *App, account, prof
 		return previewRun(ctx, cmd, app, state, runID, collector, targets, mode, time.Since(walkStarted))
 	}
 
-	return downloadRun(ctx, cmd, state, app, runID, account, resolver, collector, targets, mode, opts, api, client)
+	return downloadRun(ctx, cmd, state, app, runID, account, resolver, collector, targets, opts, api, client)
 }
 
 // walkCollector accumulates manifest items, walk context and per-chat
-// message-id highs while the walk runs.
+// message-id highs while the walk runs. cached stashes each incrementally
+// walked chat's prior-run manifest count before new rows are persisted, and
+// incremental records which chats were walked from their watermark.
 type walkCollector struct {
-	cache   *messageCache
-	items   []store.MediaItem
-	maxSeen map[int64]int64
+	cache       *messageCache
+	items       []store.MediaItem
+	maxSeen     map[int64]int64
+	cached      map[int64]int64
+	incremental map[int64]bool
 }
 
-func walkTarget(ctx context.Context, state *store.Store, api *tgapi.Client, target scan.Target,
+// walkSenderAPI is the sender-resolution surface the walk needs beyond
+// history pages; it mirrors scan's unexported SenderAPI so the walkTarget
+// seam accepts one interface.
+type walkSenderAPI interface {
+	UsersGetUsers(ctx context.Context, id []tgapi.InputUserClass) ([]tgapi.UserClass, error)
+	ChannelsGetChannels(ctx context.Context, id []tgapi.InputChannelClass) (tgapi.MessagesChatsClass, error)
+}
+
+// walkAPI bundles history iteration and sender resolution for walkTarget.
+type walkAPI interface {
+	scan.WalkAPI
+	walkSenderAPI
+}
+
+func walkTarget(ctx context.Context, state *store.Store, api walkAPI, target scan.Target,
 	plan *filters.Plan, opts filters.Options, mode runMode, collector *walkCollector,
+	progress *scanProgress,
 ) error {
-	walkOpts := opts
+	walkOpts, watermark, err := resolveWalkWindow(ctx, state, api, target, opts, mode, collector, progress)
+	if err != nil {
+		return err
+	}
 
-	if mode.syncMode {
-		watermark, err := state.Watermark(ctx, target.Chat.ID)
-		if err != nil {
-			return fmt.Errorf("read watermark chat %d: %w", target.Chat.ID, err)
-		}
-
-		walkOpts.MinID = watermark
-		walkOpts.Reverse = true
+	if watermark > 0 {
+		collector.incremental[target.Chat.ID] = true
 	}
 
 	emit := func(fctx filters.Context, msg *tgapi.Message) error {
@@ -395,6 +434,71 @@ func walkTarget(ctx context.Context, state *store.Store, api *tgapi.Client, targ
 	}
 
 	return nil
+}
+
+// resolveWalkWindow decides how much history this target needs: sync mode
+// and incremental runs with a stored watermark walk only past it; a newest
+// message id below the watermark means the chat was mass-cleared, so the
+// watermark resets and the walk covers full history again. The returned
+// watermark is the injected MinID (zero for a full walk).
+func resolveWalkWindow(
+	ctx context.Context,
+	state *store.Store,
+	api scan.WalkAPI,
+	target scan.Target,
+	opts filters.Options,
+	mode runMode,
+	collector *walkCollector,
+	progress *scanProgress,
+) (filters.Options, int64, error) {
+	walkOpts := opts
+
+	if mode.fullWalk || (!mode.syncMode && !mode.incremental) {
+		return walkOpts, 0, nil
+	}
+
+	watermark, err := state.Watermark(ctx, target.Chat.ID)
+	if err != nil {
+		return filters.Options{}, 0, fmt.Errorf("read watermark chat %d: %w", target.Chat.ID, err)
+	}
+
+	if watermark == 0 {
+		return walkOpts, 0, nil
+	}
+
+	newest := target.NewestID
+	if newest == 0 {
+		newest, err = scan.NewestMessageID(ctx, api, target.InputPeer)
+		if err != nil {
+			return filters.Options{}, 0, fmt.Errorf("probe newest message of %q: %w", target.Chat.Title, err)
+		}
+	}
+
+	if scan.HistoryCleared(watermark, newest) {
+		if err := state.ResetWatermark(ctx, target.Chat.ID); err != nil {
+			return filters.Options{}, 0, fmt.Errorf("reset watermark chat %d: %w", target.Chat.ID, err)
+		}
+
+		progress.chatCleared(target.Chat.Title)
+
+		return walkOpts, 0, nil
+	}
+
+	if !scan.ShouldWalkIncrementally(watermark, newest) {
+		return walkOpts, 0, nil
+	}
+
+	walkOpts.MinID = watermark
+	walkOpts.Reverse = true
+
+	cached, err := state.CachedMatched(ctx, target.Chat.ID)
+	if err != nil {
+		return filters.Options{}, 0, fmt.Errorf("count cached matches chat %d: %w", target.Chat.ID, err)
+	}
+
+	collector.cached[target.Chat.ID] = int64(cached)
+
+	return walkOpts, watermark, nil
 }
 
 func (c *walkCollector) observe(fctx filters.Context, msg *tgapi.Message) {
@@ -419,13 +523,22 @@ func (c *walkCollector) observe(fctx filters.Context, msg *tgapi.Message) {
 func newRunResolver(app *App, api refetchAPI) (*runResolver, *walkCollector) {
 	cache := newMessageCache(msgCacheLimit)
 
-	return &runResolver{
+	resolver := &runResolver{
 		root:     app.paths.Downloads,
 		template: app.cfg.Output.Template,
 		cache:    cache,
 		peers:    map[int64]tgapi.InputPeerClass{},
 		api:      api,
-	}, &walkCollector{cache: cache, maxSeen: map[int64]int64{}}
+	}
+
+	collector := &walkCollector{
+		cache:       cache,
+		maxSeen:     map[int64]int64{},
+		cached:      map[int64]int64{},
+		incremental: map[int64]bool{},
+	}
+
+	return resolver, collector
 }
 
 func previewRun(ctx context.Context, cmd *cobra.Command, app *App, state *store.Store, runID string,
@@ -455,7 +568,13 @@ func previewRun(ctx context.Context, cmd *cobra.Command, app *App, state *store.
 		return err
 	}
 
-	if err := printScanSummary(cmd, app, len(targets), len(collector.items), duplicates, walkTime); err != nil {
+	if err := printScanSummary(cmd, app, len(targets), collector, duplicates, walkTime); err != nil {
+		return err
+	}
+
+	// Preview walks carry no download result; every walked chat advanced
+	// cleanly, so the cache builds from the very first run.
+	if err := advanceWalkedWatermarks(ctx, state, collector, targets); err != nil {
 		return err
 	}
 
@@ -468,7 +587,7 @@ func previewRun(ctx context.Context, cmd *cobra.Command, app *App, state *store.
 
 func downloadRun(ctx context.Context, cmd *cobra.Command, state *store.Store, app *App, runID string,
 	account string, resolver *runResolver, collector *walkCollector, targets []scan.Target,
-	mode runMode, opts filters.Options, api *tgapi.Client, client *telegram.Client,
+	opts filters.Options, api *tgapi.Client, client *telegram.Client,
 ) error {
 	pacer := pace.New(pace.Config{
 		Concurrency:         app.cfg.Pacing.Concurrency,
@@ -516,7 +635,20 @@ func downloadRun(ctx context.Context, cmd *cobra.Command, state *store.Store, ap
 		Reporter: reporter,
 	})
 
-	if err := mgr.Enqueue(ctx, collector.items); err != nil {
+	// Incremental runs owe downloads not only for freshly walked matches
+	// but for manifest rows earlier runs recorded without finishing them.
+	items := collector.items
+
+	if len(collector.incremental) > 0 {
+		merged, err := withCachedPending(ctx, state, targets, collector)
+		if err != nil {
+			return finishRunE(ctx, state, runID, err)
+		}
+
+		items = merged
+	}
+
+	if err := mgr.Enqueue(ctx, items); err != nil {
 		return finishRunE(ctx, state, runID, err)
 	}
 
@@ -548,11 +680,9 @@ func downloadRun(ctx context.Context, cmd *cobra.Command, state *store.Store, ap
 		}
 	}
 
-	if mode.syncMode {
-		return advanceWatermarks(ctx, cmd, state, res, collector, targets, silent)
-	}
-
-	return nil
+	// Every completed download run refreshes the cache: full walks walked
+	// everything, incremental walks everything past the watermark.
+	return advanceWatermarks(ctx, cmd, state, res, collector, targets, silent)
 }
 
 // newDownloadReporter picks the progress surface: the bubbletea live view
@@ -603,6 +733,75 @@ func advanceWatermarks(ctx context.Context, cmd *cobra.Command, state *store.Sto
 	}
 
 	return nil
+}
+
+// advanceWalkedWatermarks moves every chat that yielded a message this run
+// to its highest walked id; preview walks have no failure signal, so every
+// walked chat advances.
+func advanceWalkedWatermarks(
+	ctx context.Context, state *store.Store, collector *walkCollector, targets []scan.Target,
+) error {
+	for _, target := range targets {
+		highest, seen := collector.maxSeen[target.Chat.ID]
+		if !seen {
+			continue
+		}
+
+		if err := state.AdvanceWatermark(ctx, target.Chat.ID, highest, time.Now()); err != nil {
+			return fmt.Errorf("advance watermark chat %d: %w", target.Chat.ID, err)
+		}
+	}
+
+	return nil
+}
+
+// withCachedPending appends to the freshly walked items the manifest rows
+// of incrementally walked chats that still owe a download (discovered,
+// queued, failed), skipping rows the current walk already produced.
+func withCachedPending(
+	ctx context.Context, state *store.Store, targets []scan.Target, collector *walkCollector,
+) ([]store.MediaItem, error) {
+	merged := make([]store.MediaItem, 0, len(collector.items))
+	merged = append(merged, collector.items...)
+
+	fresh := make(map[itemKey]bool, len(merged))
+	for _, item := range merged {
+		fresh[mediaItemKey(item)] = true
+	}
+
+	for _, target := range targets {
+		if !collector.incremental[target.Chat.ID] {
+			continue
+		}
+
+		pending, err := state.PendingMedia(ctx, target.Chat.ID)
+		if err != nil {
+			return nil, fmt.Errorf("load pending manifest rows chat %d: %w", target.Chat.ID, err)
+		}
+
+		for _, row := range pending {
+			if fresh[mediaItemKey(*row)] {
+				continue
+			}
+
+			fresh[mediaItemKey(*row)] = true
+
+			merged = append(merged, *row)
+		}
+	}
+
+	return merged, nil
+}
+
+// itemKey identifies one manifest row.
+type itemKey struct {
+	chatID    int64
+	messageID int64
+	mediaIdx  int
+}
+
+func mediaItemKey(item store.MediaItem) itemKey {
+	return itemKey{chatID: item.ChatID, messageID: item.MessageID, mediaIdx: item.MediaIndex}
 }
 
 func finishStatus(ctx context.Context, state *store.Store, runID string, res download.Result) error {
@@ -768,7 +967,18 @@ func printPlan(cmd *cobra.Command, collector *walkCollector) error {
 		return err
 	}
 
-	return printLine(cmd, "total: %d file(s), %s\n", len(collector.items), humanTotalSize(collector))
+	var cached int64
+
+	for _, value := range collector.cached {
+		cached += value
+	}
+
+	if cached == 0 {
+		return printLine(cmd, "total: %d file(s), %s\n", len(collector.items), humanTotalSize(collector))
+	}
+
+	return printLine(cmd, "total: %d file(s), %s (+%d cached from previous runs; rows above list new matches only)\n",
+		len(collector.items), humanTotalSize(collector), cached)
 }
 
 // printSummary renders the final one-line dl/sync outcome.

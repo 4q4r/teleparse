@@ -358,13 +358,17 @@ func NewLiveReporter(out io.Writer) *LiveReporter {
 
 	model := liveModel{state: state}
 
-	// TERM_PROGRAM=Apple_Terminal suppresses bubbletea's DECRQM capability
-	// query so terminal replies never leak into the shell on fast exits.
+	// TERM_PROGRAM=Apple_Terminal plus TERM=xterm-256color suppress
+	// bubbletea's DECRQM capability query (mode 2026/2027): that code path
+	// queries ghostty/wezterm-class TERM names unconditionally, and on
+	// fast abnormal exits the terminal reply otherwise leaks into the
+	// user's shell line. xterm-256color matches none of the query clauses
+	// while keeping 256-color output intact.
 	program := tea.NewProgram(model,
 		tea.WithOutput(out),
 		tea.WithInput(nil),
 		tea.WithoutSignalHandler(),
-		tea.WithEnvironment(append(os.Environ(), "TERM_PROGRAM=Apple_Terminal")),
+		tea.WithEnvironment(append(os.Environ(), "TERM_PROGRAM=Apple_Terminal", "TERM=xterm-256color")),
 	)
 
 	go func() {

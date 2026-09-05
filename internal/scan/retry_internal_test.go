@@ -12,13 +12,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// withNoopRetrySleep swaps the retry backoff for a no-op during the test.
+// withNoopRetrySleep swaps the retry backoff for a no-op during the test;
+// the swap is atomic, so parallel tests never trip the race detector.
 func withNoopRetrySleep(t *testing.T) {
 	t.Helper()
 
-	original := walkRetrySleep
-	walkRetrySleep = func(context.Context, int) error { return nil }
-	t.Cleanup(func() { walkRetrySleep = original })
+	noop := retrySleepFunc(func(context.Context, int) error { return nil })
+	walkRetrySleep.Store(&noop)
+	t.Cleanup(func() { walkRetrySleep.Store(nil) })
 }
 
 func TestRetryableWalkRPC(t *testing.T) {

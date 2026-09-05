@@ -12,18 +12,24 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// countRow is one rendered per-chat match count.
+// countRow is one rendered per-chat match count: matches includes the
+// prior-run cached manifest rows for chats walked incrementally.
 type countRow struct {
 	chatID  int64
 	title   string
 	matches int
+	cached  int
 }
 
-// countTotals aggregates the rendered count table.
+// countTotals aggregates the rendered count table; cached sums the
+// manifest rows earlier runs already matched and incremental reports
+// whether any chat was walked from its watermark.
 type countTotals struct {
 	chats         int
 	chatsWithHits int
 	files         int
+	cached        int
+	incremental   bool
 	duplicates    int
 }
 
@@ -33,6 +39,8 @@ type countJSON struct {
 	TotalChats       int            `json:"total_chats"`
 	ChatsWithMatches int            `json:"chats_with_matches"`
 	TotalMatches     int            `json:"total_matches"`
+	Cached           int            `json:"cached"`
+	Incremental      bool           `json:"incremental"`
 	Duplicates       int            `json:"duplicates"`
 }
 
@@ -41,6 +49,7 @@ type countRowJSON struct {
 	ChatID  int64  `json:"chat_id"`
 	Title   string `json:"title"`
 	Matches int    `json:"matches"`
+	Cached  int    `json:"cached"`
 }
 
 // countsTableColumnPad is the gutter between padded table columns,
@@ -54,7 +63,7 @@ const countsTableColumnPad = 2
 // message; colors apply only to the table format.
 func printCounts(cmd *cobra.Command, app *App, collector *walkCollector, targets []scan.Target, duplicates int) error {
 	rows := countRows(collector, targets)
-	totals := countTotalsFor(rows, duplicates)
+	totals := countTotalsFor(rows, duplicates, len(collector.incremental) > 0)
 
 	switch app.outputFormat() {
 	case FormatJSON:
@@ -77,16 +86,19 @@ func chatLabel(chatID int64, title string) string {
 	return title
 }
 
-// countRows computes per-chat match counts sorted by matches desc with
-// zero-match chats last; chat id breaks ties so output stays stable.
+// countRows computes per-chat match counts — new matches plus the cached
+// manifest rows of incrementally walked chats — sorted by matches desc
+// with zero-match chats last; chat id breaks ties so output stays stable.
 func countRows(collector *walkCollector, targets []scan.Target) []countRow {
 	rows := make([]countRow, 0, len(targets))
 
 	for _, target := range targets {
+		cached := int(collector.cached[target.Chat.ID])
 		rows = append(rows, countRow{
 			chatID:  target.Chat.ID,
 			title:   chatLabel(target.Chat.ID, target.Chat.Title),
-			matches: countFor(collector, target.Chat.ID),
+			matches: countFor(collector, target.Chat.ID) + cached,
+			cached:  cached,
 		})
 	}
 
@@ -102,13 +114,14 @@ func countRows(collector *walkCollector, targets []scan.Target) []countRow {
 }
 
 // countTotalsFor aggregates chats scanned, chats holding at least one
-// match, the total file count and the files this run already tracked under
-// another message.
-func countTotalsFor(rows []countRow, duplicates int) countTotals {
-	totals := countTotals{chats: len(rows), duplicates: duplicates}
+// match, the total file count, its cached share and the files this run
+// already tracked under another message.
+func countTotalsFor(rows []countRow, duplicates int, incremental bool) countTotals {
+	totals := countTotals{chats: len(rows), duplicates: duplicates, incremental: incremental}
 
 	for _, row := range rows {
 		totals.files += row.matches
+		totals.cached += row.cached
 
 		if row.matches > 0 {
 			totals.chatsWithHits++
@@ -123,7 +136,9 @@ func countsEnvelope(rows []countRow, totals countTotals) countJSON {
 	chats := make([]countRowJSON, 0, len(rows))
 
 	for _, row := range rows {
-		chats = append(chats, countRowJSON{ChatID: row.chatID, Title: row.title, Matches: row.matches})
+		chats = append(chats, countRowJSON{
+			ChatID: row.chatID, Title: row.title, Matches: row.matches, Cached: row.cached,
+		})
 	}
 
 	return countJSON{
@@ -131,6 +146,8 @@ func countsEnvelope(rows []countRow, totals countTotals) countJSON {
 		TotalChats:       totals.chats,
 		ChatsWithMatches: totals.chatsWithHits,
 		TotalMatches:     totals.files,
+		Cached:           totals.cached,
+		Incremental:      totals.incremental,
 		Duplicates:       totals.duplicates,
 	}
 }
@@ -210,6 +227,16 @@ func countsHeaderLine(styler Styler, widths [2]int) string {
 		styler.Dim("MATCHES")
 }
 
+// cachedSuffix renders the dim "(+N cached)" annotation for counts that
+// include rows served from the manifest cache.
+func cachedSuffix(styler Styler, cached int) string {
+	if cached == 0 {
+		return ""
+	}
+
+	return " " + styler.Dim("(+"+strconv.Itoa(cached)+" cached)")
+}
+
 // countsRowLine renders one data row: green counts when the chat
 // matched, the whole row dim otherwise.
 func countsRowLine(styler Styler, row countRow, widths [2]int) string {
@@ -221,14 +248,14 @@ func countsRowLine(styler Styler, row countRow, widths [2]int) string {
 
 	return padCountCell(strconv.FormatInt(row.chatID, 10), widths[0]) +
 		padCountCell(row.title, widths[1]) +
-		styler.Success(strconv.Itoa(row.matches))
+		styler.Success(strconv.Itoa(row.matches)) + cachedSuffix(styler, row.cached)
 }
 
 // countsTotalLine renders the bold TOTAL row.
 func countsTotalLine(styler Styler, totalText string, totals countTotals, widths [2]int) string {
 	return padCountCell(styler.Bold("TOTAL"), widths[0]) +
 		padCountCell(styler.Dim(totalText), widths[1]) +
-		styler.Bold(strconv.Itoa(totals.files))
+		styler.Bold(strconv.Itoa(totals.files)) + cachedSuffix(styler, totals.cached)
 }
 
 // padCountCell pads a (possibly styled) cell to width; padding is
@@ -264,6 +291,8 @@ func printCountsPlain(cmd *cobra.Command, rows []countRow, totals countTotals) e
 		{"total_chats", strconv.Itoa(totals.chats)},
 		{"chats_with_matches", strconv.Itoa(totals.chatsWithHits)},
 		{"total_matches", strconv.Itoa(totals.files)},
+		{"cached", strconv.Itoa(totals.cached)},
+		{"incremental", yesNo(totals.incremental)},
 		{"duplicates", strconv.Itoa(totals.duplicates)},
 	}
 
@@ -276,21 +305,36 @@ func printCountsPlain(cmd *cobra.Command, rows []countRow, totals countTotals) e
 
 // printScanSummary renders the final dry-run/scan outcome line to stderr
 // (colored via the stderr styler) so machine-readable stdout stays clean;
-// silent mode suppresses it. duplicates counts files this run already
-// tracked under another message and only renders when non-zero.
-func printScanSummary(cmd *cobra.Command, app *App, chats, files, duplicates int, took time.Duration) error {
+// silent mode suppresses it. The matched total includes rows served from
+// the manifest cache, andotated when any were.
+func printScanSummary(
+	cmd *cobra.Command, app *App, chats int, collector *walkCollector, duplicates int, took time.Duration,
+) error {
 	if app.silentMode(cmd) {
 		return nil
 	}
 
-	line := app.errStyle.Dim("scanned:") + " " + app.errStyle.Success(strconv.Itoa(chats)+" chats") + ", " +
-		app.errStyle.Dim("matched:") + " " + app.errStyle.Success(strconv.Itoa(files)+" files")
+	cached := int64(0)
 
-	if duplicates > 0 {
-		line += ", " + app.errStyle.Dim("duplicates:") + " " + app.errStyle.Success(strconv.Itoa(duplicates))
+	for _, value := range collector.cached {
+		cached += value
 	}
 
-	line += ", " + app.errStyle.Dim("took") + " " + scanClock(took) + "\n"
+	annotation := ""
+	if cached > 0 {
+		annotation = " " + app.errStyle.Dim("(+"+strconv.FormatInt(cached, 10)+" cached)")
+	}
+
+	dupAnnotation := ""
+	if duplicates > 0 {
+		dupAnnotation = ", " + app.errStyle.Dim("duplicates:") + " " +
+			app.errStyle.Success(strconv.Itoa(duplicates))
+	}
+
+	line := app.errStyle.Dim("scanned:") + " " + app.errStyle.Success(strconv.Itoa(chats)+" chats") + ", " +
+		app.errStyle.Dim("matched:") + " " +
+		app.errStyle.Success(strconv.Itoa(len(collector.items)+int(cached))+" files") + annotation + dupAnnotation + ", " +
+		app.errStyle.Dim("took") + " " + scanClock(took) + "\n"
 
 	if _, err := fmt.Fprint(cmd.ErrOrStderr(), line); err != nil {
 		return fmt.Errorf("print scan summary: %w", err)

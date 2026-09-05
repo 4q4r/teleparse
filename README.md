@@ -26,6 +26,7 @@ SOCKS4/5, HTTP CONNECT, MTProto-proxy (`dd`/`ee` fake-TLS) or the new **WEB-prox
 - [Proxies](#proxies)
 - [WEB-proxy v1](#web-proxy-v1)
 - [Anti-ban](#anti-ban)
+- [Incremental runs](#incremental-runs)
 - [State, resume, dedup](#state-resume-dedup)
 - [Architecture](#architecture)
 - [Development](#development)
@@ -85,6 +86,7 @@ Releases are cut by [GoReleaser](https://goreleaser.com) on every `v*` tag
 - [Proxies](#proxies)
 - [WEB-proxy v1](#web-proxy-v1)
 - [Anti-ban](#anti-ban)
+- [Incremental runs](#incremental-runs)
 - [State, resume, dedup](#state-resume-dedup)
 - [Architecture](#architecture)
 - [Development](#development)
@@ -128,6 +130,7 @@ server quirks that apply to your combination.
 | Command | Purpose |
 |---|---|
 | Takeout | auto-engaged on large scans (`takeout_auto`, threshold `takeout_auto_min_chats = 50`), `--takeout` force / `--no-takeout` disable; export session finishes with the run |
+| `--full` on `dl`/`scan`/`sync` | force one complete re-walk of every chat, ignoring cached watermarks |
 | `auth login \| logout \| status \| list` | multi-account sessions (0600, flock, stable device identity) |
 | `auth login --qr [--timeout 5m]` | QR-code login: scan with Telegram on another device (auto-refreshing token) |
 | `auth login --import-telethon session.sqlite` | migrate a Telethon session's auth key |
@@ -267,6 +270,9 @@ threads     = 4        # ranged parts in parallel per file (1-16)
 connections = 3        # pooled MTProto connections per DC (1-8)
 premium_boost = true   # premium preset (8/8) on auto-detected premium accounts
 
+[scan]
+incremental = true     # watermark-cached walks; --full overrides per run
+
 [output]
 root      = ""                                # "" = ~/.local/share/teleparse/downloads
 template  = "{chat}/{date:%Y-%m}/{filename}"
@@ -348,6 +354,45 @@ session token. Carriers: `websocket` / `websocket-lanes` (primary), `https` / `h
 - Stable per-account device fingerprint (derived once, persisted, never drifts).
 - Sessions 0600, single-process flock, entity cache persisted (deleted channels: the server no
   longer returns history — your local manifest is the recovery).
+
+## Incremental runs
+
+`scan`, `dl` and `sync` walk chats **incrementally by default**
+(`[scan] incremental = true`): each chat remembers the highest message id it
+was walked up to (a watermark), and the next run only asks Telegram for
+messages past it. A 10–16 minute full-history run becomes seconds on the
+second pass. The cache builds from the very first run of any mode.
+
+What is cached:
+
+- **Per-chat watermarks** — "history below id N has been walked". Advanced
+  after every successful walk (a chat with failed downloads keeps its old
+  watermark, so `dl`/`resume` re-walk and retry it).
+- **The media manifest** — every match ever recorded in the state DB, keyed
+  by Telegram's immutable media identity. Count-only and dry-run totals
+  include it (`matched 572 files (+318 cached)`); rows above the footer list
+  new matches only. Incremental `dl` runs re-offer manifest rows that still
+  owe a download (discovered by a scan, queued, failed) — including rows
+  from runs with different filters, because the manifest is per-chat.
+
+What invalidates it:
+
+- **History-clear detection**: the dialogs page carries each chat's newest
+  message id for free (explicit chat specs cost one extra `getHistory`
+  probe, only when a watermark exists). If the newest id dropped *below*
+  the watermark, the chat was mass-cleared: the watermark resets and the
+  chat is re-walked in full (`history cleared: <title> (re-walking)`).
+- **`--full`** on `dl`/`scan`/`sync` forces one complete re-walk of every
+  chat, ignoring the watermarks. `[scan] incremental = false` makes every
+  run a full walk.
+
+What is **not** detected (accepted trade-off): single old deletions and
+edits older than Telegram's 48-hour edit window never invalidate anything —
+media identities are immutable, so already-downloaded files stay correct;
+files deleted remotely only surface as failed downloads on runs that
+re-offer them. Manifest rows picked up without fresh walk context (no
+template fields like `{date}` available) land under
+`<chatID>/<msgID>_<index><ext>`.
 
 ## State, resume, dedup
 
