@@ -13,6 +13,7 @@ import (
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/auth/qrlogin"
 	gotdtg "github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 	"rsc.io/qr"
 )
 
@@ -43,7 +44,79 @@ type QROptions struct {
 	// Out receives the instructions, the matrix and the URL (stderr in
 	// production; QR noise never goes to the machine-readable stdout).
 	Out io.Writer
+	// AskPassword prompts for the 2FA cloud password when the approving
+	// account requires one (nil disables interactive completion and the
+	// raw SESSION_PASSWORD_NEEDED error surfaces with a hint).
+	AskPassword func(string) (string, error)
 }
+
+// qrPasswordPrompt is the question shown when the QR approval requires 2FA.
+const qrPasswordPrompt = "Cloud password (2FA) for the approved account"
+
+// qrPasswordAttempts bounds re-asks on a wrong cloud password.
+const qrPasswordAttempts = 3
+
+// qrPasswordTimeout bounds the whole 2FA completion after QR approval,
+// independent of the (possibly expired) QR wait deadline.
+const qrPasswordTimeout = 2 * time.Minute
+
+// ErrQRPasswordNoAsk reports a 2FA-protected approval without a prompter.
+var ErrQRPasswordNoAsk = errors.New(
+	"the approving account requires a 2FA password (scan approved; run interactively to enter it)")
+
+// passwordLogin is the seam over client.Auth() for 2FA completion.
+type passwordLogin interface {
+	Password(ctx context.Context, password string) (*gotdtg.AuthAuthorization, error)
+}
+
+// isSessionPasswordNeeded reports whether err is the 2FA challenge Telegram
+// answers QR approval with.
+func isSessionPasswordNeeded(err error) bool {
+	return tgerr.Is(err, "SESSION_PASSWORD_NEEDED")
+}
+
+// isWrongPassword reports an incorrect cloud password answer.
+func isWrongPassword(err error) bool {
+	return tgerr.Is(err, "PASSWORD_HASH_INVALID")
+}
+
+// completeQRPassword finishes a QR login that hit SESSION_PASSWORD_NEEDED:
+// it asks for the cloud password (re-asking on a wrong one, up to
+// qrPasswordAttempts) and completes the SRP exchange.
+func completeQRPassword(ctx context.Context, auth passwordLogin,
+	ask func(string) (string, error),
+) (*gotdtg.AuthAuthorization, error) {
+	if ask == nil {
+		return nil, ErrQRPasswordNoAsk
+	}
+
+	for range qrPasswordAttempts {
+		password, err := ask(qrPasswordPrompt)
+		if err != nil {
+			return nil, fmt.Errorf("read cloud password: %w", err)
+		}
+
+		if password == "" {
+			continue
+		}
+
+		authz, err := auth.Password(ctx, password)
+		if err == nil {
+			return authz, nil
+		}
+
+		if isWrongPassword(err) {
+			continue
+		}
+
+		return nil, fmt.Errorf("complete 2FA: %w", err)
+	}
+
+	return nil, fmt.Errorf("%d wrong 2FA passwords: %w", qrPasswordAttempts, ErrQRWrongPassword)
+}
+
+// ErrQRWrongPassword reports exhausted 2FA attempts.
+var ErrQRWrongPassword = errors.New("wrong cloud password")
 
 // qrLoginer is the narrow seam over gotd's QR loop so the token-rotation and
 // timeout state machine can run against fakes. It is satisfied verbatim by
@@ -94,7 +167,16 @@ func QRLogin(
 		defer cancel()
 
 		if _, err := runQRLogin(ctx, client.QR(), loggedIn, opts.Out, opts.TTY && !opts.ASCII); err != nil {
-			return err
+			if !isSessionPasswordNeeded(err) {
+				return err
+			}
+
+			pwCtx, pwCancel := context.WithTimeout(context.WithoutCancel(ctx), qrPasswordTimeout)
+			defer pwCancel()
+
+			if _, err := completeQRPassword(pwCtx, client.Auth(), opts.AskPassword); err != nil {
+				return fmt.Errorf("qr approval needs 2fa: %w", err)
+			}
 		}
 
 		who, err := WhoAmI(ctx, client, storage)

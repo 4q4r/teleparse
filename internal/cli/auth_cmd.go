@@ -179,10 +179,11 @@ func authLoginCmd(app *App) *cobra.Command {
 
 			if plan.QR {
 				info, err := tg.QRLogin(cmd.Context(), account, creds, tg.QROptions{
-					Timeout: qrTimeout,
-					ASCII:   app.noASCII,
-					TTY:     term.IsTerminal(int(os.Stderr.Fd())),
-					Out:     cmd.ErrOrStderr(),
+					Timeout:     qrTimeout,
+					ASCII:       app.noASCII,
+					TTY:         term.IsTerminal(int(os.Stderr.Fd())),
+					Out:         cmd.ErrOrStderr(),
+					AskPassword: newStdPrompter().Hidden,
 				}, app.cfg, app.paths)
 				if err != nil {
 					return fail(cmd, err)
