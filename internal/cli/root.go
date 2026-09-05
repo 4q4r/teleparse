@@ -3,7 +3,8 @@ package cli
 
 import (
 	"fmt"
-	"teleparse/internal/config"
+
+	"github.com/4q4r/teleparse/internal/config"
 
 	"github.com/spf13/cobra"
 )

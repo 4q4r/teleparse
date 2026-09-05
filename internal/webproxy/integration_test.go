@@ -15,9 +15,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"teleparse/internal/webproxy"
 	"testing"
 	"time"
+
+	"github.com/4q4r/teleparse/internal/webproxy"
 
 	"github.com/gotd/td/bin"
 	"github.com/gotd/td/mtproxy/obfuscated2"

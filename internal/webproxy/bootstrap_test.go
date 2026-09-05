@@ -9,9 +9,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
-	"teleparse/internal/webproxy"
 	"testing"
 	"time"
+
+	"github.com/4q4r/teleparse/internal/webproxy"
 
 	"github.com/stretchr/testify/require"
 )

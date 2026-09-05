@@ -7,7 +7,8 @@ import (
 	"net"
 	"net/url"
 	"strings"
-	"teleparse/internal/webproxy"
+
+	"github.com/4q4r/teleparse/internal/webproxy"
 
 	"github.com/gotd/td/mtproxy"
 	"github.com/gotd/td/telegram/dcs"

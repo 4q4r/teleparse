@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"teleparse/internal/filters"
-	"teleparse/internal/store"
-	"teleparse/internal/tg"
 	"time"
+
+	"github.com/4q4r/teleparse/internal/filters"
+	"github.com/4q4r/teleparse/internal/store"
+	"github.com/4q4r/teleparse/internal/tg"
 
 	"github.com/gotd/td/telegram"
 	tgapi "github.com/gotd/td/tg"

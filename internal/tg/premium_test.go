@@ -6,9 +6,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"teleparse/internal/tg"
 	"testing"
 	"time"
+
+	"github.com/4q4r/teleparse/internal/tg"
 
 	gotdtg "github.com/gotd/td/tg"
 	"github.com/stretchr/testify/assert"

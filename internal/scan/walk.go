@@ -3,7 +3,8 @@ package scan
 import (
 	"context"
 	"fmt"
-	"teleparse/internal/filters"
+
+	"github.com/4q4r/teleparse/internal/filters"
 
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/query/messages"

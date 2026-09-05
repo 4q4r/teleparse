@@ -4,7 +4,8 @@ package main
 import (
 	"fmt"
 	"os"
-	"teleparse/internal/cli"
+
+	"github.com/4q4r/teleparse/internal/cli"
 )
 
 func main() {

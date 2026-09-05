@@ -1,7 +1,7 @@
 package download
 
 import (
-	"teleparse/internal/filters"
+	"github.com/4q4r/teleparse/internal/filters"
 )
 
 // SidecarMeta is the message metadata written next to a completed download

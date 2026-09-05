@@ -1,9 +1,10 @@
 package filters_test
 
 import (
-	"teleparse/internal/filters"
 	"testing"
 	"time"
+
+	"github.com/4q4r/teleparse/internal/filters"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

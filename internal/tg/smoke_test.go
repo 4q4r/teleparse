@@ -2,9 +2,10 @@ package tg_test
 
 import (
 	"fmt"
-	"teleparse/internal/testutil/tlmock"
-	"teleparse/internal/tg"
 	"testing"
+
+	"github.com/4q4r/teleparse/internal/testutil/tlmock"
+	"github.com/4q4r/teleparse/internal/tg"
 
 	"github.com/gotd/td/bin"
 	"github.com/gotd/td/telegram/message/peer"

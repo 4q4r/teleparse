@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"teleparse/internal/store"
+
+	"github.com/4q4r/teleparse/internal/store"
 
 	"github.com/gotd/td/telegram/downloader"
 	tg "github.com/gotd/td/tg"

@@ -2,9 +2,10 @@ package cli
 
 import (
 	"strconv"
-	"teleparse/internal/filters"
-	"teleparse/internal/store"
 	"time"
+
+	"github.com/4q4r/teleparse/internal/filters"
+	"github.com/4q4r/teleparse/internal/store"
 
 	tg "github.com/gotd/td/tg"
 )

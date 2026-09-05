@@ -3,8 +3,9 @@ package cli
 import (
 	"fmt"
 	"strconv"
-	"teleparse/internal/store"
 	"text/tabwriter"
+
+	"github.com/4q4r/teleparse/internal/store"
 
 	"github.com/spf13/cobra"
 )

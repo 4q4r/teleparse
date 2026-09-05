@@ -9,9 +9,10 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"teleparse/internal/webproxy"
 	"testing"
 	"time"
+
+	"github.com/4q4r/teleparse/internal/webproxy"
 
 	"github.com/coder/websocket"
 	"github.com/gotd/td/bin"

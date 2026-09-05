@@ -1,8 +1,9 @@
 package config_test
 
 import (
-	"teleparse/internal/config"
 	"testing"
+
+	"github.com/4q4r/teleparse/internal/config"
 
 	"github.com/stretchr/testify/assert"
 )

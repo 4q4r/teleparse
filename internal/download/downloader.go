@@ -13,10 +13,11 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"teleparse/internal/config"
-	"teleparse/internal/pace"
-	"teleparse/internal/store"
 	"time"
+
+	"github.com/4q4r/teleparse/internal/config"
+	"github.com/4q4r/teleparse/internal/pace"
+	"github.com/4q4r/teleparse/internal/store"
 
 	tg "github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"

@@ -5,8 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"teleparse/internal/store"
 	"testing"
+
+	"github.com/4q4r/teleparse/internal/store"
 
 	"github.com/gotd/td/telegram/downloader"
 	tg "github.com/gotd/td/tg"
