@@ -115,6 +115,24 @@ func probeErr() (int, error) { return 0, assert.AnError }
 // probeNone marks an unused probe (flag/config branches never call it).
 func probeNone() (int, error) { return -1, nil }
 
+// TestPrintTakeoutPoolsNotice pins the dl-level notice under an active
+// takeout session: verbose runs explain the single-connection download
+// mode, silent mode prints nothing.
+func TestPrintTakeoutPoolsNotice(t *testing.T) {
+	t.Parallel()
+
+	cmd, errBuf := newErrCmd()
+
+	require.NoError(t, printTakeoutPoolsNotice(cmd, &App{errStyle: NewStyler(false)}, false))
+
+	got := errBuf.String()
+	assert.Contains(t, got, "downloads ride the takeout session")
+	assert.Contains(t, got, "parallel pools resume on non-takeout runs")
+
+	require.NoError(t, printTakeoutPoolsNotice(cmd, &App{}, true))
+	assert.Equal(t, got, errBuf.String(), "silent mode prints nothing")
+}
+
 func TestTakeoutFallback(t *testing.T) {
 	t.Parallel()
 
