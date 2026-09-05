@@ -38,7 +38,6 @@ archives:
     name_template: >-
       {{ .ProjectName }}_{{ title .Os }}_
       {{- if eq .Arch "amd64" }}x86_64{{ else }}{{ .Arch }}{{ end }}
-      {{- if eq .Os "windows" }}.exe{{ end }}
 
 checksum:
   algorithm: sha256
