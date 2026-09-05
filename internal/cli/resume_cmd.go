@@ -171,6 +171,13 @@ func resumeOne(app *App, cmd *cobra.Command, run store.Run) error {
 		return withAPI(ctx, client, cfg.Net.Takeout, func(ctx context.Context, api *tgapi.Client) error {
 			return executeRun(ctx, cmd, app, run.Account, textOrDefault(run.Profile),
 				opts, plan, payload.Chats, runMode{}, api, client)
+		}, func(finishErr error) {
+			if app.silentMode(cmd) {
+				return
+			}
+
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "%s\n", app.errStyle.Warning(
+				"takeout session finished with a server warning (ignored): "+finishErr.Error()))
 		})
 	})
 	if runErr != nil {

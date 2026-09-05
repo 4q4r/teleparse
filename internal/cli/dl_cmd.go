@@ -247,6 +247,13 @@ func runAccountSession(
 				api *tgapi.Client,
 			) error {
 				return executeRun(ctx, cmd, app, account, profileName, opts, plan, specs, mode, api, client)
+			}, func(finishErr error) {
+				if app.silentMode(cmd) {
+					return
+				}
+
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "%s\n", app.errStyle.Warning(
+					"takeout session finished with a server warning (ignored): "+finishErr.Error()))
 			})
 		}
 
@@ -271,23 +278,58 @@ func runAccountSession(
 
 // withAPI runs fn with the raw API client, wrapped in a takeout session
 // when requested so downloads ride the export rate-limit path.
-func withAPI(ctx context.Context, client *telegram.Client, takeoutMode bool,
+// errTakeoutCallbackNotRun marks that the takeout session failed BEFORE
+// the wrapped run started (init phase); distinguishing it from a nil
+// callback error lets finish-phase noise be downgraded to a warning.
+var errTakeoutCallbackNotRun = errors.New("takeout init failed before the run started")
+
+// withAPI runs fn with the raw API client, wrapped in a takeout session
+// when requested so downloads ride the export rate-limit path. Finish-phase
+// failures (e.g. TAKEOUT_REQUIRED after a long run) never fail an
+// otherwise-successful run: the abandoned session simply expires
+// server-side; onFinishWarn (nil-safe) receives the reason.
+func withAPI(
+	ctx context.Context,
+	client *telegram.Client,
+	takeoutMode bool,
 	runAPI func(context.Context, *tgapi.Client) error,
+	onFinishWarn func(error),
 ) error {
 	if !takeoutMode {
 		return runAPI(ctx, client.API())
 	}
 
-	if err := takeout.Run(ctx, client, takeout.Config{
+	callbackErr := errTakeoutCallbackNotRun
+
+	err := takeout.Run(ctx, client, takeout.Config{
 		Files:             true,
 		MessageUsers:      true,
 		MessageChats:      true,
 		MessageMegagroups: true,
 		MessageChannels:   true,
 	}, func(ctx context.Context, session *takeout.Client) error {
-		return runAPI(ctx, tgapi.NewClient(session))
-	}); err != nil {
+		callbackErr = runAPI(ctx, tgapi.NewClient(session))
+
+		return callbackErr
+	})
+	if err == nil {
+		return nil
+	}
+
+	// Init-phase failure: the callback never ran (auto-takeout fallback
+	// and user errors depend on seeing this).
+	if errors.Is(callbackErr, errTakeoutCallbackNotRun) {
 		return fmt.Errorf("run takeout session: %w", err)
+	}
+
+	// Callback failure is the real result; finish noise is dropped.
+	if callbackErr != nil {
+		return callbackErr
+	}
+
+	// The run itself succeeded: only the finish call failed. Downgrade.
+	if onFinishWarn != nil {
+		onFinishWarn(err)
 	}
 
 	return nil
