@@ -20,14 +20,24 @@ var ErrNoFetch = errors.New("no fetch function configured")
 // ErrNoLocation reports a download attempt without a usable file location.
 var ErrNoLocation = errors.New("no file location for media item")
 
-// RefetchFunc rebuilds the file location, refetching the source message when
-// the stored file_reference has expired.
+// ErrMessageGone reports a refetch whose source message no longer exists
+// (deleted or returned empty); no retry can recover the item.
+var ErrMessageGone = errors.New("source message gone")
+
+// ErrMediaGone reports a refetched message whose media is no longer
+// downloadable; no retry can recover the item.
+var ErrMediaGone = errors.New("message media gone")
+
+// RefetchFunc rebuilds the file location by refetching the source message:
+// when the stored file_reference has expired, or when an item carries no
+// location at all because its walk context is gone (cached manifest rows).
 type RefetchFunc func(ctx context.Context) (tg.InputFileLocationClass, error)
 
 // Input is one ranged download request: the media identity, the byte offset
 // the destination already holds, the current location, the data center the
-// file lives on (0 when unknown) and an optional refetch hook for
-// FILE_REFERENCE_EXPIRED handling.
+// file lives on (0 when unknown) and an optional refetch hook that mints a
+// fresh location for FILE_REFERENCE_EXPIRED handling and for items whose
+// location is only obtainable by refetching the source message.
 type Input struct {
 	Item     store.MediaItem
 	Offset   int64

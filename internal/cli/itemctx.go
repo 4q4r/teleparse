@@ -17,10 +17,7 @@ import (
 )
 
 // Sentinel errors for message-context resolution.
-var (
-	errNoPeerForRefetch   = errors.New("chat peer unknown; refetch impossible without a fresh walk")
-	errMessageNotReturned = errors.New("server returned no message for id")
-)
+var errNoPeerForRefetch = errors.New("chat peer unknown; refetch impossible without a fresh walk")
 
 // msgCacheLimit bounds the retained walked messages (LRU by insertion).
 const msgCacheLimit = 10_000
@@ -36,8 +33,11 @@ type msgCacheKey struct {
 
 // walkedMessage retains what the download stage needs after the walk: the
 // filter context (paths, sidecars) plus the raw message (file references).
+// A nil fctx marks a message re-fetched to hydrate a cached manifest row:
+// it carries a fresh file reference but no walk context, so path and
+// sidecar fall back to store-only fields.
 type walkedMessage struct {
-	fctx filters.Context
+	fctx *filters.Context
 	msg  *tg.Message
 }
 
@@ -105,22 +105,33 @@ type runResolver struct {
 func (r *runResolver) Resolve(item store.MediaItem) (download.Resolved, error) {
 	resolved := download.Resolved{Refetch: r.refetchFor(item)}
 
-	if entry, ok := r.cache.get(item.ChatID, item.MessageID); ok {
-		rel, err := download.RenderTemplate(r.template, entry.fctx, entry.fctx.File)
-		if err != nil {
-			return download.Resolved{}, fmt.Errorf("render path for %d/%d: %w", item.ChatID, item.MessageID, err)
-		}
-
-		resolved.Path = path.Join(r.root, rel)
-		resolved.Meta = sidecarFromContext(entry.fctx, resolved.Path)
-		resolved.Location = locationFromMessage(entry.msg)
-		resolved.DC = dcFromMessage(entry.msg)
+	entry, ok := r.cache.get(item.ChatID, item.MessageID)
+	if !ok {
+		resolved.Path = path.Join(r.root, fallbackRelPath(item))
+		resolved.Meta = sidecarFromItem(item, resolved.Path)
 
 		return resolved, nil
 	}
 
-	resolved.Path = path.Join(r.root, fallbackRelPath(item))
-	resolved.Meta = sidecarFromItem(item, resolved.Path)
+	resolved.Location = locationFromMessage(entry.msg)
+	resolved.DC = dcFromMessage(entry.msg)
+
+	// Refetched messages (nil fctx) hydrate only the location and DC;
+	// path and sidecar keep the store-only fallback.
+	if entry.fctx == nil {
+		resolved.Path = path.Join(r.root, fallbackRelPath(item))
+		resolved.Meta = sidecarFromItem(item, resolved.Path)
+
+		return resolved, nil
+	}
+
+	rel, err := download.RenderTemplate(r.template, *entry.fctx, entry.fctx.File)
+	if err != nil {
+		return download.Resolved{}, fmt.Errorf("render path for %d/%d: %w", item.ChatID, item.MessageID, err)
+	}
+
+	resolved.Path = path.Join(r.root, rel)
+	resolved.Meta = sidecarFromContext(*entry.fctx, resolved.Path)
 
 	return resolved, nil
 }
@@ -135,11 +146,29 @@ func (r *runResolver) refetchFor(item store.MediaItem) download.RefetchFunc {
 		location := locationFromMessage(msg)
 		if location == nil {
 			return nil, fmt.Errorf("message %d/%d carries no downloadable media: %w",
-				item.ChatID, item.MessageID, errMessageNotReturned)
+				item.ChatID, item.MessageID, download.ErrMediaGone)
 		}
+
+		r.seedCache(item.ChatID, item.MessageID, msg)
 
 		return location, nil
 	}
+}
+
+// seedCache stores a freshly fetched message so later resolutions of the
+// same row reuse its file reference; an existing walked entry keeps its
+// filter context and only has its message refreshed.
+func (r *runResolver) seedCache(chatID, msgID int64, msg *tg.Message) {
+	key := msgCacheKey{chatID: chatID, msgID: msgID}
+
+	entry, ok := r.cache.get(chatID, msgID)
+	if !ok {
+		entry = walkedMessage{msg: msg}
+	} else {
+		entry.msg = msg
+	}
+
+	r.cache.put(key, entry)
 }
 
 func (r *runResolver) refetchMessage(ctx context.Context, chatID, msgID int64) (*tg.Message, error) {
@@ -176,7 +205,7 @@ func (r *runResolver) refetchMessage(ctx context.Context, chatID, msgID int64) (
 		}
 	}
 
-	return nil, fmt.Errorf("message %d in chat %d: %w", msgID, chatID, errMessageNotReturned)
+	return nil, fmt.Errorf("message %d in chat %d: %w", msgID, chatID, download.ErrMessageGone)
 }
 
 func messagesOfClass(result tg.MessagesMessagesClass) []*tg.Message {
