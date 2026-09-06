@@ -179,6 +179,7 @@ func newApp() *App {
 		chatsCmd(app),
 		scanCmd(app),
 		dlCmd(app),
+		getCmd(app),
 		syncCmd(app),
 		resumeCmd(app),
 		runsCmd(app),
