@@ -143,7 +143,7 @@ func TestWalkTargetInjectsWatermarkAsMinID(t *testing.T) {
 	target := walkTestTarget(30, 900)
 
 	require.NoError(t, walkTarget(ctx, state, api, target,
-		&filters.Plan{}, filters.Options{}, runMode{incremental: true}, collector, nil))
+		&filters.Plan{}, filters.Options{}, runMode{incremental: true}, collector, nil, 0))
 
 	require.NotEmpty(t, api.requests)
 	assert.Equal(t, 500, api.requests[len(api.requests)-1].MinID,
@@ -161,7 +161,7 @@ func TestWalkTargetProbesNewestWhenScopeHadNoDialogData(t *testing.T) {
 	target := walkTestTarget(30, 0) // explicit spec: newest id unknown
 
 	require.NoError(t, walkTarget(ctx, state, api, target,
-		&filters.Plan{}, filters.Options{}, runMode{incremental: true}, collector, nil))
+		&filters.Plan{}, filters.Options{}, runMode{incremental: true}, collector, nil, 0))
 
 	require.GreaterOrEqual(t, len(api.requests), 2, "probe plus walk pages")
 
@@ -184,7 +184,7 @@ func TestWalkTargetResetsClearedHistoryAndRewalks(t *testing.T) {
 	progress := &scanProgress{out: buf, styler: NewStyler(false), total: 1}
 
 	require.NoError(t, walkTarget(ctx, state, api, target,
-		&filters.Plan{}, filters.Options{}, runMode{incremental: true}, collector, progress))
+		&filters.Plan{}, filters.Options{}, runMode{incremental: true}, collector, progress, 0))
 
 	wm, err := state.Watermark(ctx, 30)
 	require.NoError(t, err)
@@ -206,7 +206,7 @@ func TestWalkTargetSyncModeWalksFromWatermarkRegardlessOfIncrementalFlag(t *test
 	target := walkTestTarget(30, 900)
 
 	require.NoError(t, walkTarget(ctx, state, api, target,
-		&filters.Plan{}, filters.Options{}, runMode{syncMode: true}, collector, nil))
+		&filters.Plan{}, filters.Options{}, runMode{syncMode: true}, collector, nil, 0))
 
 	require.NotEmpty(t, api.requests)
 	assert.Equal(t, 300, api.requests[len(api.requests)-1].MinID,
@@ -223,7 +223,7 @@ func TestWalkTargetFullWalkFlagForcesCompleteRewalk(t *testing.T) {
 	target := walkTestTarget(30, 900)
 
 	require.NoError(t, walkTarget(ctx, state, api, target,
-		&filters.Plan{}, filters.Options{}, runMode{incremental: true, fullWalk: true}, collector, nil))
+		&filters.Plan{}, filters.Options{}, runMode{incremental: true, fullWalk: true}, collector, nil, 0))
 
 	require.NotEmpty(t, api.requests)
 	assert.Zero(t, api.requests[len(api.requests)-1].MinID, "--full must bypass the watermark")
@@ -248,7 +248,7 @@ func TestWalkTargetStashesCachedMatchedCount(t *testing.T) {
 	target := walkTestTarget(30, 900)
 
 	require.NoError(t, walkTarget(ctx, state, api, target,
-		&filters.Plan{}, filters.Options{}, runMode{incremental: true}, collector, nil))
+		&filters.Plan{}, filters.Options{}, runMode{incremental: true}, collector, nil, 0))
 
 	assert.Equal(t, int64(3), collector.cached[30], "prior-run manifest rows are stashed for count totals")
 }
@@ -280,7 +280,7 @@ func TestWalkLoopFeedsCachedMatchesIntoChatDone(t *testing.T) {
 	before := len(collector.items)
 
 	require.NoError(t, walkTarget(ctx, state, api, target,
-		&filters.Plan{}, filters.Options{}, runMode{incremental: true}, collector, nil))
+		&filters.Plan{}, filters.Options{}, runMode{incremental: true}, collector, nil, 0))
 
 	model.Update(scanChatMsg{
 		title:   chatLabel(target.Chat.ID, target.Chat.Title),

@@ -9,6 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/4q4r/teleparse/internal/filters"
 )
 
 // Sentinel errors wrapped by dynamic validation messages.
@@ -25,6 +28,7 @@ var (
 	ErrNoHomeDir          = errors.New("cannot resolve home directory")
 	ErrBadThreads         = errors.New("must be within 1..16")
 	ErrBadConnections     = errors.New("must be within 1..8")
+	ErrBadRewalkAge       = errors.New(`must be a relative duration like 30s, 10m, 1h ("0" disables)`)
 )
 
 // Defaults for pacing (see research: conservative anti-ban numbers) and
@@ -39,6 +43,8 @@ const (
 	defaultRetryMax          = 4
 	// defaultTakeoutAutoMinChats is the auto-takeout scope-size threshold.
 	defaultTakeoutAutoMinChats = 50
+	// defaultRewalkMinAge is the default per-chat walk freshness window.
+	defaultRewalkMinAge = "10m"
 	// DefaultThreads is the built-in per-file ranged-thread count.
 	DefaultThreads = 4
 	// DefaultConnections is the built-in per-DC pooled connection count.
@@ -154,9 +160,34 @@ func (d Download) usingDefaultSizing() bool {
 
 // Scan tunes walk caching: incremental walks reuse per-chat watermarks so
 // repeat runs only walk messages that appeared since the last successful
-// pass, instead of re-walking full history every time.
+// pass, instead of re-walking full history every time; rewalk_min_age adds
+// per-chat freshness on top, so a run restarted seconds after a stop skips
+// chats whose last walk is younger than the window.
 type Scan struct {
 	Incremental bool `toml:"incremental"`
+	// RewalkMinAge is the youngest a chat's last walk may be before the
+	// run re-walks it; a relative duration ("30s", "10m", "1h"), where
+	// "0" disables freshness and every run walks every chat.
+	RewalkMinAge string `toml:"rewalk_min_age"`
+}
+
+// RewalkAge parses RewalkMinAge into the per-chat walk freshness window;
+// zero means every run re-walks every chat regardless of recency.
+func (s Scan) RewalkAge() (time.Duration, error) {
+	if s.RewalkMinAge == "" {
+		return 0, nil
+	}
+
+	age, err := filters.ParseRelative(s.RewalkMinAge)
+	if err != nil {
+		return 0, fmt.Errorf("scan.rewalk_min_age %q: %w: %w", s.RewalkMinAge, ErrBadRewalkAge, err)
+	}
+
+	if age < 0 {
+		return 0, fmt.Errorf("scan.rewalk_min_age %q: %w: negative", s.RewalkMinAge, ErrBadRewalkAge)
+	}
+
+	return age, nil
 }
 
 // Config is the root configuration object.
@@ -245,7 +276,8 @@ func Default() *Config {
 			PremiumBoost: true,
 		},
 		Scan: Scan{
-			Incremental: true,
+			Incremental:  true,
+			RewalkMinAge: defaultRewalkMinAge,
 		},
 		Filters: Filters{
 			Dedupe: "hardlink",
@@ -276,6 +308,10 @@ func (c *Config) Validate() error {
 
 	if c.Net.TakeoutAuto && c.Net.TakeoutAutoMinChats < 1 {
 		return fmt.Errorf("net.takeout_auto_min_chats %d: %w", c.Net.TakeoutAutoMinChats, ErrBadTakeoutMinChats)
+	}
+
+	if _, err := c.Scan.RewalkAge(); err != nil {
+		return err
 	}
 
 	if c.Net.Proxy != "" && !strings.Contains(c.Net.Proxy, "://") {

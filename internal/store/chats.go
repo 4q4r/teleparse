@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -47,14 +49,44 @@ func (s *Store) Watermark(ctx context.Context, chatID int64) (int64, error) {
 	return watermark, nil
 }
 
+// ChatLastWalked returns when the chat last completed a walk, as stamped by
+// AdvanceWatermark; ok is false when the chat has never been walked.
+func (s *Store) ChatLastWalked(ctx context.Context, chatID int64) (time.Time, bool, error) {
+	var stamped *string
+
+	err := s.db.QueryRowContext(ctx, `
+		SELECT last_synced_at FROM chats WHERE chat_id = ?`, chatID).Scan(&stamped)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return time.Time{}, false, nil
+		}
+
+		return time.Time{}, false, fmt.Errorf("last walked chat %d: %w", chatID, err)
+	}
+
+	if stamped == nil {
+		return time.Time{}, false, nil
+	}
+
+	when, err := time.Parse(time.RFC3339Nano, *stamped)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("parse last_synced_at chat %d: %w", chatID, err)
+	}
+
+	return when, true, nil
+}
+
 // AdvanceWatermark moves the chat watermark forward to maxContiguousID and
-// stamps last_synced_at with when; lower ids never regress the watermark.
+// stamps last_synced_at with when; lower ids never regress the watermark,
+// but every completed walk still refreshes the stamp so walk freshness
+// survives chats whose history stood still.
 func (s *Store) AdvanceWatermark(ctx context.Context, chatID int64, maxContiguousID int64, when time.Time) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE chats
-		SET last_seen_message_id = ?, last_synced_at = ?
-		WHERE chat_id = ? AND last_seen_message_id < ?`,
-		maxContiguousID, formatTime(when), chatID, maxContiguousID)
+		SET last_seen_message_id = MAX(last_seen_message_id, ?),
+		    last_synced_at = ?
+		WHERE chat_id = ?`,
+		maxContiguousID, formatTime(when), chatID)
 	if err != nil {
 		return fmt.Errorf("advance watermark chat %d: %w", chatID, err)
 	}

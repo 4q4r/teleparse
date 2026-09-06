@@ -71,7 +71,7 @@ type teleparseOptionsEmbed struct {
 // addFullWalkFlag registers the shared --full opt-out of incremental walks.
 func addFullWalkFlag(cmd *cobra.Command, flags *dlRunFlags) {
 	cmd.Flags().BoolVar(&flags.full, "full", false,
-		"force a full re-walk of every chat (ignore cached watermarks; overrides scan.incremental)")
+		"force a full re-walk of every chat (ignore cached watermarks and rewalk freshness; overrides scan.incremental)")
 }
 
 // incrementalMode resolves whether this run walks incrementally: config
@@ -392,6 +392,11 @@ func executeRun(ctx context.Context, cmd *cobra.Command, app *App, account, prof
 
 	resolver, collector := newRunResolver(app, api)
 
+	rewalkMinAge, err := app.cfg.Scan.RewalkAge()
+	if err != nil {
+		return finishRunE(ctx, state, runID, err)
+	}
+
 	// Every walk mode — plain dl and sync as much as dry-run and
 	// count-only — renders the live walk progress instead of minutes of
 	// silence before downloads appear.
@@ -412,7 +417,7 @@ func executeRun(ctx context.Context, cmd *cobra.Command, app *App, account, prof
 
 		progress.chatStart(chatLabel(target.Chat.ID, target.Chat.Title))
 
-		if err := walkTarget(ctx, state, api, target, plan, opts, mode, collector, progress); err != nil {
+		if err := walkTarget(ctx, state, api, target, plan, opts, mode, collector, progress, rewalkMinAge); err != nil {
 			progress.close()
 
 			return finishRunE(ctx, state, runID, err)
@@ -469,15 +474,23 @@ type walkAPI interface {
 
 func walkTarget(ctx context.Context, state *store.Store, api walkAPI, target scan.Target,
 	plan *filters.Plan, opts filters.Options, mode runMode, collector *walkCollector,
-	progress *scanProgress,
+	progress *scanProgress, rewalkMinAge time.Duration,
 ) error {
-	walkOpts, watermark, err := resolveWalkWindow(ctx, state, api, target, opts, mode, collector, progress)
+	walkOpts, watermark, freshSkip, err := resolveWalkWindow(ctx, state, api, target, opts, mode,
+		collector, progress, rewalkMinAge)
 	if err != nil {
 		return err
 	}
 
 	if watermark > 0 {
 		collector.incremental[target.Chat.ID] = true
+	}
+
+	// A freshly walked chat needs no pages at all: the run proceeds on the
+	// cached manifest and the caller settles the progress line with the
+	// stashed cached count.
+	if freshSkip {
+		return nil
 	}
 
 	emit := func(fctx filters.Context, msg *tgapi.Message) error {
@@ -498,8 +511,10 @@ func walkTarget(ctx context.Context, state *store.Store, api walkAPI, target sca
 // resolveWalkWindow decides how much history this target needs: sync mode
 // and incremental runs with a stored watermark walk only past it; a newest
 // message id below the watermark means the chat was mass-cleared, so the
-// watermark resets and the walk covers full history again. The returned
-// watermark is the injected MinID (zero for a full walk).
+// watermark resets and the walk covers full history again. A chat whose
+// last walk is younger than rewalkMinAge skips the walk entirely (reported
+// as freshSkip; the cached manifest serves the run). The returned watermark
+// is the injected MinID (zero for a full walk).
 func resolveWalkWindow(
 	ctx context.Context,
 	state *store.Store,
@@ -509,42 +524,52 @@ func resolveWalkWindow(
 	mode runMode,
 	collector *walkCollector,
 	progress *scanProgress,
-) (filters.Options, int64, error) {
+	rewalkMinAge time.Duration,
+) (filters.Options, int64, bool, error) {
 	walkOpts := opts
 
 	if mode.fullWalk || (!mode.syncMode && !mode.incremental) {
-		return walkOpts, 0, nil
+		return walkOpts, 0, false, nil
 	}
 
 	watermark, err := state.Watermark(ctx, target.Chat.ID)
 	if err != nil {
-		return filters.Options{}, 0, fmt.Errorf("read watermark chat %d: %w", target.Chat.ID, err)
+		return filters.Options{}, 0, false, fmt.Errorf("read watermark chat %d: %w", target.Chat.ID, err)
 	}
 
 	if watermark == 0 {
-		return walkOpts, 0, nil
+		return walkOpts, 0, false, nil
+	}
+
+	freshSkip, err := chatFreshlyWalked(ctx, state, target, collector, rewalkMinAge)
+	if err != nil {
+		return filters.Options{}, 0, false, err
+	}
+
+	if freshSkip {
+		return walkOpts, watermark, true, nil
 	}
 
 	newest := target.NewestID
 	if newest == 0 {
 		newest, err = scan.NewestMessageID(ctx, api, target.InputPeer)
 		if err != nil {
-			return filters.Options{}, 0, fmt.Errorf("probe newest message of %q: %w", target.Chat.Title, err)
+			return filters.Options{}, 0, false, fmt.Errorf("probe newest message of %q: %w", target.Chat.Title, err)
 		}
 	}
 
 	if scan.HistoryCleared(watermark, newest) {
 		if err := state.ResetWatermark(ctx, target.Chat.ID); err != nil {
-			return filters.Options{}, 0, fmt.Errorf("reset watermark chat %d: %w", target.Chat.ID, err)
+			return filters.Options{}, 0, false, fmt.Errorf("reset watermark chat %d: %w", target.Chat.ID, err)
 		}
 
 		progress.chatCleared(target.Chat.Title)
 
-		return walkOpts, 0, nil
+		return walkOpts, 0, false, nil
 	}
 
 	if !scan.ShouldWalkIncrementally(watermark, newest) {
-		return walkOpts, 0, nil
+		return walkOpts, 0, false, nil
 	}
 
 	walkOpts.MinID = watermark
@@ -552,12 +577,46 @@ func resolveWalkWindow(
 
 	cached, err := state.CachedMatched(ctx, target.Chat.ID)
 	if err != nil {
-		return filters.Options{}, 0, fmt.Errorf("count cached matches chat %d: %w", target.Chat.ID, err)
+		return filters.Options{}, 0, false, fmt.Errorf("count cached matches chat %d: %w", target.Chat.ID, err)
 	}
 
 	collector.cached[target.Chat.ID] = int64(cached)
 
-	return walkOpts, watermark, nil
+	return walkOpts, watermark, false, nil
+}
+
+// chatFreshlyWalked reports whether the chat's last completed walk is
+// younger than rewalkMinAge, in which case the run skips the walk entirely.
+// The cached manifest count is stashed on the collector so the settled
+// progress line and download totals stay honest without a single page fetch.
+func chatFreshlyWalked(
+	ctx context.Context,
+	state *store.Store,
+	target scan.Target,
+	collector *walkCollector,
+	rewalkMinAge time.Duration,
+) (bool, error) {
+	if rewalkMinAge <= 0 {
+		return false, nil
+	}
+
+	lastWalked, walked, err := state.ChatLastWalked(ctx, target.Chat.ID)
+	if err != nil {
+		return false, fmt.Errorf("read last walk chat %d: %w", target.Chat.ID, err)
+	}
+
+	if !walked || time.Since(lastWalked) >= rewalkMinAge {
+		return false, nil
+	}
+
+	cached, err := state.CachedMatched(ctx, target.Chat.ID)
+	if err != nil {
+		return false, fmt.Errorf("count cached matches chat %d: %w", target.Chat.ID, err)
+	}
+
+	collector.cached[target.Chat.ID] = int64(cached)
+
+	return true, nil
 }
 
 func (c *walkCollector) observe(fctx filters.Context, msg *tgapi.Message) {
