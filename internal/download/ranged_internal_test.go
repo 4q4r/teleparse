@@ -4,13 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
+	"os"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/4q4r/teleparse/internal/config"
 	"github.com/4q4r/teleparse/internal/pace"
 	"github.com/4q4r/teleparse/internal/store"
+	"github.com/4q4r/teleparse/internal/transport"
 
 	"github.com/gotd/td/telegram/downloader"
 	tg "github.com/gotd/td/tg"
@@ -650,6 +655,153 @@ func TestRangedBackoffSchedule(t *testing.T) {
 	assert.Equal(t, 3*base, rangedBackoff(2, base))
 	assert.Equal(t, 9*base, rangedBackoff(3, base))
 	assert.Equal(t, 9*base, rangedBackoff(7, base), "the backoff caps at 9s")
+}
+
+// deadPipeChain builds the typed production shape of a proxy-killed
+// write: gotd's rpc engine ("send"), transport connection ("write") and
+// intermediate codec ("write intermediate") wrap a *net.OpError over
+// syscall.EPIPE — the raw write to a socket the local proxy already
+// closed.
+func deadPipeChain() error {
+	return fmt.Errorf("send: %w", fmt.Errorf("write: %w", fmt.Errorf("write intermediate: %w", &net.OpError{
+		Op:     "write",
+		Net:    "tcp",
+		Source: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 38246},
+		Addr:   &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 10809},
+		Err:    os.NewSyscallError("write", syscall.EPIPE),
+	})))
+}
+
+// deadPipeText is the same death with the type lost crossing a wrap
+// boundary: only the rendered chain survives.
+func deadPipeText() error {
+	return errors.New("send: write: write intermediate: write tcp 127.0.0.1:38246->127.0.0.1:10809: write: broken pipe")
+}
+
+// TestRangedFetchDeadPipeRetriesSameChunk pins the typed production
+// shape: a local proxy killing the tunnel mid-chunk (write EPIPE) costs
+// ONLY that chunk — the same idempotent range re-requests through the
+// redialed proxied connection and the file completes.
+func TestRangedFetchDeadPipeRetriesSameChunk(t *testing.T) {
+	t.Parallel()
+
+	data := make([]byte, 2*rangedChunkSize+100)
+
+	srv := &rangedServer{
+		data:    data,
+		failN:   map[int64]int{rangedChunkSize: 1},
+		failErr: map[int64]error{rangedChunkSize: deadPipeChain()},
+	}
+
+	rec := &sleepRecorder{}
+
+	fetch, in := rangedTestFetch(srv, rec, int64ptr(int64(len(data))), 0, nil)
+
+	dest := &memWriterAt{}
+
+	written, err := fetch(t.Context(), *in, dest)
+	require.NoError(t, err)
+
+	assert.EqualValues(t, len(data), written)
+	assert.Equal(t, data, dest.data)
+
+	require.Len(t, srv.calls, 4, "the dead chunk is re-requested exactly once")
+
+	assert.EqualValues(t, rangedChunkSize, srv.calls[1].offset)
+	assert.EqualValues(t, rangedChunkSize, srv.calls[2].offset, "the retry must target the SAME chunk through the redial")
+
+	require.Len(t, rec.slept, 1, "one dead carrier means one backoff")
+}
+
+// TestRangedFetchDeadTransportTextRetriesSameChunk pins the portable
+// fallback at the chunk seam: a carrier death whose type was lost still
+// re-requests the same range instead of failing the item.
+func TestRangedFetchDeadTransportTextRetriesSameChunk(t *testing.T) {
+	t.Parallel()
+
+	data := make([]byte, rangedChunkSize+100)
+
+	srv := &rangedServer{
+		data:    data,
+		failN:   map[int64]int{0: 1},
+		failErr: map[int64]error{0: deadPipeText()},
+	}
+
+	rec := &sleepRecorder{}
+
+	fetch, in := rangedTestFetch(srv, rec, int64ptr(int64(len(data))), 0, nil)
+
+	dest := &memWriterAt{}
+
+	written, err := fetch(t.Context(), *in, dest)
+	require.NoError(t, err)
+
+	assert.EqualValues(t, len(data), written)
+	assert.Equal(t, data, dest.data)
+
+	require.Len(t, srv.calls, 3, "the dead chunk is re-requested exactly once, then the tail")
+
+	assert.EqualValues(t, 0, srv.calls[0].offset)
+	assert.EqualValues(t, 0, srv.calls[1].offset, "the retry must target the SAME chunk")
+
+	require.Len(t, rec.slept, 1)
+}
+
+// TestRangedFetchDeadPipeExhaustionPreservesChain pins the ladder
+// handoff for a long-dead proxy: the chunk budget burns, and the
+// climbing error keeps the EPIPE chain so the Manager backstop can
+// classify the exhaustion as a dead carrier, not a content failure.
+func TestRangedFetchDeadPipeExhaustionPreservesChain(t *testing.T) {
+	t.Parallel()
+
+	srv := &rangedServer{
+		data:    make([]byte, rangedChunkSize),
+		failN:   map[int64]int{0: 99},
+		failErr: map[int64]error{0: deadPipeChain()},
+	}
+
+	rec := &sleepRecorder{}
+
+	fetch, in := rangedTestFetch(srv, rec, int64ptr(rangedChunkSize), 0, nil)
+
+	_, err := fetch(t.Context(), *in, &memWriterAt{})
+	require.Error(t, err)
+
+	require.ErrorIs(t, err, syscall.EPIPE, "exhaustion must keep the carrier-death chain")
+	assert.Contains(t, err.Error(), "after 3 retries")
+
+	require.Len(t, srv.calls, 4, "the budget of 3 retries buys exactly 3 re-requests")
+	assert.Len(t, rec.slept, 3)
+}
+
+// TestRangedFetchShortFileStaysFatal pins the boundary against the
+// dead-transport predicate: a server ending the file before the manifest
+// total is a content verdict (permanent failure), never a resumable
+// carrier death — the sentinel must not be an EOF shape.
+func TestRangedFetchShortFileStaysFatal(t *testing.T) {
+	t.Parallel()
+
+	srv := &rangedServer{data: []byte("0123456789"), failN: map[int64]int{}, failErr: map[int64]error{}}
+
+	rec := &sleepRecorder{}
+
+	// The manifest promises 20 bytes; the server only ever serves 10.
+	fetch, in := rangedTestFetch(srv, rec, int64ptr(20), 0, nil)
+
+	_, err := fetch(t.Context(), *in, &memWriterAt{})
+	require.Error(t, err)
+
+	require.ErrorIs(t, err, ErrShortFile, "a short file is its own verdict")
+	require.NotErrorIs(t, err, io.ErrUnexpectedEOF, "the sentinel must not be EOF-shaped")
+	assert.False(t, transport.IsDeadTransport(err), "a short file is not a carrier death")
+
+	// Two calls by design: the data lands, then the tail probe floors
+	// back onto offset 0 and finds nothing past the resume point.
+	require.Len(t, srv.calls, 2, "a short file never re-requests past the verdict")
+
+	assert.EqualValues(t, 0, srv.calls[0].offset)
+	assert.EqualValues(t, 0, srv.calls[1].offset)
+	assert.Empty(t, rec.slept)
 }
 
 // compile-time: the fake satisfies the gotd download client seam.

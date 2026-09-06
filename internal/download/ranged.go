@@ -8,6 +8,8 @@ import (
 	"net"
 	"time"
 
+	"github.com/4q4r/teleparse/internal/transport"
+
 	"github.com/gotd/td/telegram/downloader"
 	tg "github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
@@ -37,6 +39,12 @@ var ErrCDNRedirectUnsupported = errors.New("cdn redirect unsupported in ranged m
 // ErrUnexpectedChunkResult reports upload.getFile answers that are
 // neither a file chunk nor a redirect.
 var ErrUnexpectedChunkResult = errors.New("unexpected upload.getFile result")
+
+// ErrShortFile reports an upload.getFile answer that ends before the
+// manifest's total: a content verdict that fails permanently. Deliberately
+// not EOF-shaped so the dead-transport predicate cannot turn it into a
+// resumable carrier death.
+var ErrShortFile = errors.New("server ended the file before the manifest total")
 
 // RangedOptions tunes RangedFetch.
 type RangedOptions struct {
@@ -102,7 +110,11 @@ type rangedState struct {
 // requested at its absolute offset, so a dropped connection costs only
 // the CURRENT chunk: transient failures re-request the same idempotent
 // range over the redialed connection instead of restarting the file at
-// byte zero like the gotd downloader.
+// byte zero like the gotd downloader. The redial is implicit and fresh:
+// gotd's reconnection loop (telegram/connect.go) replaces the primary
+// connection behind an exponential 100ms..5s backoff once the carrier
+// dies, so the next chunk request dials a new proxied tunnel — no
+// forced-reconnect hook is needed.
 //
 // Transfers resume at Input.Offset — no SkipWriterAt is needed because
 // nothing below the offset is ever requested beyond the final partial
@@ -167,7 +179,7 @@ func (state *rangedState) next(ctx context.Context, pos int64) (int64, bool, err
 		// file, or a short file when the manifest promised more.
 		if state.total > 0 && pos < state.total {
 			return pos, false, fmt.Errorf("short file: %d of %d bytes at %d: %w",
-				pos, state.total, reqOff, io.ErrUnexpectedEOF)
+				pos, state.total, reqOff, ErrShortFile)
 		}
 
 		return pos, true, nil
@@ -286,11 +298,18 @@ func chunkBytes(result tg.UploadFileClass) ([]byte, error) {
 // rangedTransient reports chunk errors worth an idempotent re-request:
 // a wrapped cancellation while the run lives is gotd's engine
 // force-closing on a dropped connection (a dead run context is the user
-// interrupt and climbs immediately), network errors are redials, and
-// 5xx rpc answers are server-side hiccups.
+// interrupt and climbs immediately), dead carriers — a local proxy
+// killing the tunnel mid-write (EPIPE), resets, EOF-shaped write deaths,
+// including type-less chains matched by message — are redials, other
+// network errors are redials too, and 5xx rpc answers are server-side
+// hiccups.
 func rangedTransient(ctx context.Context, err error) bool {
 	if isCancellationErr(err) {
 		return ctx.Err() == nil
+	}
+
+	if transport.IsDeadTransport(err) {
+		return true
 	}
 
 	var netErr net.Error
