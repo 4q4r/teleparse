@@ -271,6 +271,24 @@ func (s *Store) MarkInterrupted(ctx context.Context, chatID, messageID int64, me
 	return nil
 }
 
+// RequeueMedia returns a stuck or damaged row to the queue with its retry
+// budget restored: status queued, attempts zeroed and the stale last error
+// cleared — the same reset semantics crash recovery applies. The verify
+// --fix repair path uses it to hand unrepairable rows back to the
+// download ladder.
+func (s *Store) RequeueMedia(ctx context.Context, chatID, messageID int64, mediaIndex int) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE media
+		SET status = ?, attempts = 0, last_error = NULL, updated_at = ?
+		WHERE chat_id = ? AND message_id = ? AND media_index = ?`,
+		StatusQueued, nowUTC(), chatID, messageID, mediaIndex)
+	if err != nil {
+		return fmt.Errorf("requeue %d/%d/%d: %w", chatID, messageID, mediaIndex, err)
+	}
+
+	return nil
+}
+
 // Counts returns the number of media rows per status, including zeroed
 // entries for every media lifecycle status.
 func (s *Store) Counts(ctx context.Context) (map[string]int, error) {

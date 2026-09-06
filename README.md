@@ -144,6 +144,7 @@ server quirks that apply to your combination.
 | `profile save \| list \| show \| rm` | named filter presets in config |
 | `export jsonl \| csv` | manifest export |
 | `stats` | per-chat totals |
+| `verify [CHATS]` | offline integrity sweep of manifest vs disk; `--deep` adds native archive validation, `--fix` repairs |
 | `dedupe stats \| gc` | inspect the hardlink blob store; `gc` removes blobs whose last copy is gone |
 | `proxy show \| test` | proxy config and DC probe (DCs 2-5) |
 | `ping [--dc N\|all]` | connect time + RPC RTT to Telegram DCs via the session |
@@ -437,6 +438,62 @@ a byte copy (counted as `link_copies` in the summary; warned once per run).
 `teleparse dedupe stats` reports blob count/bytes and tracked vs orphaned blobs;
 `teleparse dedupe gc` unlinks blobs whose link count is 1 — nothing references the data
 anymore, so the bytes are freed. Files are never touched, only the hidden blob store.
+
+### Verify: integrity sweep with repair
+
+`teleparse verify [CHATS]...` works fully offline against the manifest and the
+downloads tree — no session, no network. It stats every done row's final path and
+its canonical blob and classifies:
+
+| Class | Meaning |
+|---|---|
+| `ok` | final path present, size matches the manifest |
+| `missing` | final path **and** blob are gone |
+| `final-missing-blob-alive` | only the blob survives — repairable offline |
+| `size-mismatch` | on-disk size drifted from the recorded size |
+| `hash-mismatch` | (`--deep`) sha256 re-hash differs from the recorded digest |
+| `format-error` | (`--deep`) native archive validation failed |
+| `unchecked-format` | (`--deep`) extension has no native validator — a coverage note, never a failure |
+| `orphan-blob` | blob-store bytes no manifest row references |
+| `row-without-path` | queued/failed rows without a path — counted, skipped |
+
+`--deep` validates archive formats **natively with the Go standard library — no
+external ffmpeg/ffprobe/unrar**:
+
+| Format | Check |
+|---|---|
+| `.zip` | `archive/zip` full walk — every member is decompressed, per-member CRC32 verified |
+| `.tar.gz` / `.tgz` / `.gz` | `compress/gzip` full decompress (CRC32 + ISIZE verified), tar headers walked when the payload is a tar |
+| `.rar` | honest **lite** check: RAR4/RAR5 signature plus best-effort end-of-archive marker in the final bytes — member integrity is out of reach without external tooling |
+| other | size check only (`unchecked-format`) |
+
+`--fix` repairs what it safely can, offline: `final-missing-blob-alive` rows are
+re-hardlinked from the live blob (no network), `missing` / `size-mismatch` /
+`hash-mismatch` rows are requeued (`status=queued`, `attempts=0` — the same reset
+crash recovery uses) for the next `teleparse dl`, and orphan blobs go through the
+`dedupe gc` path (link-count-1 rule). `format-error` rows are **never**
+auto-repaired — corrupted bytes in place need a human decision.
+
+```console
+$ teleparse verify
+CLASS                 ROWS
+ok                    1204
+final-missing-blob-alive 3
+missing               1
+
+CHAT  MSG   CLASS                     FILE        DETAIL
+-100… 8841  final-missing-blob-alive  photo.jpg   final path gone, blob alive
+…
+
+problems: 4, remaining: 4
+verify: 4 problem(s) remain (run with --fix to repair): integrity problems found
+```
+
+Exit code is non-zero while problems remain (after `--fix`, only what could not
+be repaired). Output honors `--format table|json|plain`; problems stream as
+one settled stderr line each, suppressed by `--silent`. Chat filters accept
+numeric ids or stored-title substrings (`teleparse verify 123 "News*"` — no
+globbing, plain substring), or `all` (the default).
 
 ## Architecture
 
