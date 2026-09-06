@@ -186,6 +186,7 @@ func newApp() *App {
 		exportCmd(app),
 		statsCmd(app),
 		dedupeCmd(app),
+		verifyCmd(app),
 		proxyCmd(app),
 		pingCmd(app),
 		doctorCmd(app),

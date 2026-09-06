@@ -34,6 +34,37 @@ func (s *Store) UpsertChat(ctx context.Context, chat Chat) error {
 	return nil
 }
 
+// DistinctChatIDs returns every chat that owns at least one media row,
+// ordered by id; the offline surfaces (verify) use it to resolve chat
+// filters without touching the network.
+func (s *Store) DistinctChatIDs(ctx context.Context) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT chat_id FROM media ORDER BY chat_id`)
+	if err != nil {
+		return nil, fmt.Errorf("list chat ids: %w", err)
+	}
+
+	defer func() { _ = rows.Close() }()
+
+	var ids []int64
+
+	for rows.Next() {
+		var chatID int64
+
+		if err := rows.Scan(&chatID); err != nil {
+			return nil, fmt.Errorf("scan chat id: %w", err)
+		}
+
+		ids = append(ids, chatID)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate chat ids: %w", err)
+	}
+
+	return ids, nil
+}
+
 // ChatTitle returns the stored title of the chat; ok is false when the chat
 // is unknown or its title is NULL or blank, the signal for callers to fall
 // back to a chat_<id> label.
