@@ -24,6 +24,7 @@ func syncCmd(app *App) *cobra.Command {
 	}
 	cmd.Flags().String("profile", "", "named filter profile overlay")
 	addFullWalkFlag(cmd, &flags)
+	addNoRoutingFlag(cmd, &flags)
 	addNotifyWebhookFlag(cmd)
 	addSilentOutputMirror(cmd)
 	addFilterFlags(cmd, &filterSet)

@@ -154,7 +154,7 @@ func runGetCommand(
 			client *telegram.Client,
 		) error {
 			return runAccountSession(ctx, cmd, app, account, profileName, opts, plan, getJobSpecs(job),
-				mode, client, &cfg, flags, job)
+				mode, client, &cfg, flags, nil, job)
 		})
 		if runErr != nil {
 			return fail(cmd, runErr)
