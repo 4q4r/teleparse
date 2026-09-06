@@ -51,6 +51,12 @@ type RangedOptions struct {
 	// Reporter, when it implements ItemReporter, receives flood-wait
 	// surfacing. May be nil.
 	Reporter Reporter
+	// pools resolves per-DC RPC targets for pooled runs; nil rides the
+	// fixed fallback client (single-connection takeout sessions).
+	pools InvokerSource
+	// fallback is the RPC target used when pools is nil and the one pool
+	// resolution degrades to on failure.
+	fallback downloader.Client
 	// retries bounds transient re-requests per chunk; tests only.
 	retries int
 	// backoff is the base delay between chunk retries; tests only.
@@ -91,11 +97,15 @@ func (o RangedOptions) resolve() rangedConfig {
 	return cfg
 }
 
-// rangedState carries one ranged transfer: the rpc target, the resolved
-// knobs, the input (refetch seam), the current location, the destination
-// and the total byte count (0 when unknown).
+// rangedState carries one ranged transfer: the current rpc target, the
+// pool seam (nil for fixed-target runs), the input (refetch seam), the
+// current location, the DC the file last lived on, the destination and
+// the total byte count (0 when unknown).
 type rangedState struct {
 	rpc      downloader.Client
+	pools    InvokerSource
+	fallback downloader.Client
+	dc       int
 	cfg      rangedConfig
 	input    Input
 	location tg.InputFileLocationClass
@@ -104,26 +114,53 @@ type rangedState struct {
 }
 
 // RangedFetch adapts explicit upload.getFile ranged requests onto
-// FetchFunc for single-connection sessions (takeout multiplexes every
-// download onto the session's one invoker, where the gotd parallel
-// machinery has nothing to parallelize over). Each 512KiB chunk is
-// requested at its absolute offset, so a dropped connection costs only
-// the CURRENT chunk: transient failures re-request the same idempotent
-// range over the redialed connection instead of restarting the file at
-// byte zero like the gotd downloader. The redial is implicit and fresh:
-// gotd's reconnection loop (telegram/connect.go) replaces the primary
-// connection behind an exponential 100ms..5s backoff once the carrier
-// dies, so the next chunk request dials a new proxied tunnel — no
-// forced-reconnect hook is needed.
+// FetchFunc for a single fixed RPC target — the takeout session's one
+// invoker, where every download multiplexes onto one connection. Each
+// 512KiB chunk is requested at its absolute offset, so a dropped
+// connection costs only the CURRENT chunk: transient failures re-request
+// the same idempotent range over the redialed connection instead of
+// restarting the file at byte zero like the gotd downloader. The redial
+// is implicit and fresh: gotd's reconnection loop (telegram/connect.go)
+// replaces the primary connection behind an exponential 100ms..5s backoff
+// once the carrier dies, so the next chunk request dials a new proxied
+// tunnel — no forced-reconnect hook is needed.
 //
-// Transfers resume at Input.Offset — no SkipWriterAt is needed because
-// nothing below the offset is ever requested beyond the final partial
-// 4KiB block (re-fetched and re-written byte-identically to sit on the
-// server's offset alignment). The Manager retry ladder above this fetch
-// is the whole-item reconnect budget: it re-enters at the current .part
-// size, so exhausting the per-chunk budget costs one attempt, never the
-// bytes.
+// Transfers resume at Input.Offset — nothing below the offset is ever
+// requested beyond the final partial 4KiB block (re-fetched and re-written
+// byte-identically to sit on the server's offset alignment). The Manager
+// retry ladder above this fetch is the whole-item reconnect budget: it
+// re-enters at the current .part size, so exhausting the per-chunk budget
+// costs one attempt, never the bytes.
 func RangedFetch(rpc downloader.Client, opts RangedOptions) FetchFunc {
+	opts.fallback = rpc
+	opts.pools = nil
+
+	return rangedFetch(opts)
+}
+
+// RangedPoolFetch drives the same ranged engine over per-DC pooled
+// connections: every item resolves its RPC target through the
+// InvokerSource seam (home-DC pool for dc 0, the fallback primary
+// connection when pool creation fails), and a FILE_MIGRATE answer
+// re-resolves the pool for the server-named DC and re-requests the SAME
+// idempotent chunk — no whole-item restart, no byte-zero re-transfer.
+// Chunks stay sequential per file, yet pooled: gotd's pool.Invoke hands
+// each request an idle pooled connection and releases it afterwards, so
+// the manager's concurrent items interleave across the pool. Nil pools
+// degrade to the fixed fallback client (the takeout shape).
+func RangedPoolFetch(pools InvokerSource, fallback downloader.Client, opts RangedOptions) FetchFunc {
+	if pools == nil {
+		return RangedFetch(fallback, opts)
+	}
+
+	opts.pools = pools
+	opts.fallback = fallback
+
+	return rangedFetch(opts)
+}
+
+// rangedFetch builds the universal engine over resolved options.
+func rangedFetch(opts RangedOptions) FetchFunc {
 	cfg := opts.resolve()
 
 	return func(ctx context.Context, input Input, dest io.WriterAt) (int64, error) {
@@ -133,7 +170,10 @@ func RangedFetch(rpc downloader.Client, opts RangedOptions) FetchFunc {
 		}
 
 		state := &rangedState{
-			rpc:      rpc,
+			rpc:      invokerFor(ctx, opts.pools, opts.fallback, input.DC),
+			pools:    opts.pools,
+			fallback: opts.fallback,
+			dc:       input.DC,
 			cfg:      cfg,
 			input:    input,
 			location: location,
@@ -251,6 +291,17 @@ func (state *rangedState) request(ctx context.Context, reqOff int64) ([]byte, er
 			continue
 		}
 
+		if migrated, ok := tgerr.AsType(err, errTypeFileMigrate); ok && state.pools != nil {
+			// The file lives on another DC: re-resolve the pool for the
+			// server-named DC and re-request the same idempotent chunk —
+			// migration costs no budget and no bytes. Pooled runs only;
+			// a single-connection session cannot follow (climbs as-is).
+			state.dc = migrated.Argument
+			state.rpc = invokerFor(ctx, state.pools, state.fallback, state.dc)
+
+			continue
+		}
+
 		if !rangedTransient(ctx, err) {
 			return nil, fmt.Errorf("chunk at %d: %w", reqOff, err)
 		}
@@ -357,26 +408,21 @@ func sleepContext(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-// FetchOptions tunes the engine FetchFor selects between.
+// FetchOptions tunes the ranged engine FetchFor wires.
 type FetchOptions struct {
-	// Threads is the per-file ranged-part parallelism for the pooled
-	// engine (1..16, validated by config).
-	Threads int
-	// Reporter receives flood-wait surfacing from either engine; may be
-	// nil.
+	// Reporter receives flood-wait surfacing; may be nil.
 	Reporter Reporter
 }
 
-// FetchFor selects the transfer engine for a run. Nil pools means a
-// single-connection session — an active takeout forbids raw media
-// connections, so every download multiplexes onto the session's one
-// invoker — where the parallel machinery is pointless and connection
-// drops must resume from the exact on-disk offset: the ranged sequential
-// engine. Pooled runs keep the parallel engine unchanged.
+// FetchFor wires the transfer engine for a run — the ranged sequential
+// engine everywhere. The gotd parallel downloader this replaces ALWAYS
+// re-transfers from byte zero, so a resumed .part file wrote everything
+// below its offset into the void: zero counted progress at 92-98% with
+// 0B/s while gigabytes silently re-downloaded. The ranged engine resumes
+// at the exact on-disk offset on every path. Nil pools (an active takeout
+// forbids raw media connections) rides the single fallback invoker;
+// pooled runs resolve per-DC targets through the InvokerSource seam with
+// home-DC fallback and FILE_MIGRATE re-resolution.
 func FetchFor(pools InvokerSource, fallback downloader.Client, opts FetchOptions) FetchFunc {
-	if pools == nil {
-		return RangedFetch(fallback, RangedOptions{Reporter: opts.Reporter})
-	}
-
-	return ParallelFetch(pools, fallback, ParallelOptions{Threads: opts.Threads, Reporter: opts.Reporter})
+	return RangedPoolFetch(pools, fallback, RangedOptions{Reporter: opts.Reporter})
 }

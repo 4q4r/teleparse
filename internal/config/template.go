@@ -108,13 +108,14 @@ func templateTail() string {
 
 [download]
 # threads = 4
-# Ranged parts fetched in parallel per file (1-16). Each thread rides its
-# own pooled connection, so one large file can saturate a link.
+# Accepted for compatibility; downloads are sequential ranged streams per
+# file - throughput scales with connections and pacing concurrency.
 
 # connections = 3
 # MTProto connections pooled per data center, shared by all files routed
-# to that DC (1-8). Turbo preset for impatient lines:
-#   threads = 8, connections = 6
+# to that DC (1-8). Each chunk request takes an idle pooled connection.
+# Turbo preset for impatient lines:
+#   connections = 6
 # Never exceed ~20 total connections per DC: beyond that Telegram answers
 # FLOOD_PREMIUM_WAIT (an account-level throttle; Telegram Premium removes
 # it). Short waits are slept automatically and surfaced in the live UI as
@@ -122,8 +123,9 @@ func templateTail() string {
 
 # premium_boost = true
 # Premium accounts are auto-detected (cached 24h) and upgrade the default
-# sizing to the premium preset (8/8) - TDLib's premium envelope. Explicit
-# threads/connections always win; false pins the defaults.
+# connection sizing to the premium preset (8 connections) - TDLib's
+# premium envelope. Explicit connections always win; false pins the
+# defaults.
 
 # [scan] tunes walk caching for scan/dl/sync.
 

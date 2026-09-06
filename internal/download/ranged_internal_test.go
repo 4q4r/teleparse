@@ -511,6 +511,7 @@ func TestRangedFetchNonTransientSurfaces(t *testing.T) {
 // TestFetchForSelectsRangedWhenPoolsNil pins the wire: nil pools (the
 // takeout single-connection session) selects the ranged engine. A fatal
 // rpc answer climbs on the first request, so no backoff schedule runs.
+// Pooled runs are pinned by TestFetchForRidesRangedWithPools.
 func TestFetchForSelectsRangedWhenPoolsNil(t *testing.T) {
 	t.Parallel()
 
@@ -525,25 +526,6 @@ func TestFetchForSelectsRangedWhenPoolsNil(t *testing.T) {
 	_, err := fetch(t.Context(), parallelInput(0), &memWriterAt{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ranged download", "nil pools must ride the ranged engine")
-}
-
-// TestFetchForKeepsParallelWithPools pins the wire: pooled runs keep the
-// gotd parallel engine unchanged.
-func TestFetchForKeepsParallelWithPools(t *testing.T) {
-	t.Parallel()
-
-	boom := errors.New("pool rpc down")
-
-	pools := &fakePools{
-		byDC:  map[int]downloader.Client{0: fakeInvoker{dc: 1}},
-		fails: map[int]error{0: boom},
-	}
-
-	fetch := FetchFor(pools, fakeInvoker{dc: 9}, FetchOptions{Threads: 2})
-
-	_, err := fetch(t.Context(), parallelInput(0), &memWriterAt{})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "parallel download", "pooled runs must keep the parallel engine")
 }
 
 // rangedResolver maps every item onto <root>/file.bin with a fixed
