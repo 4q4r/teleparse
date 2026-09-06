@@ -25,6 +25,16 @@ const msgCacheLimit = 10_000
 // photoFallbackThumb is the size used when a photo exposes no sizes.
 const photoFallbackThumb = "m"
 
+// namingMsgID is the [output] naming style renaming {filename} to
+// <msgID>_<index><ext>; config.NamingMsgID spelled for the resolver layer.
+const namingMsgID = "msgid"
+
+// chatTitleSource reads stored chat titles for store-only path resolution;
+// *store.Store satisfies it.
+type chatTitleSource interface {
+	ChatTitle(ctx context.Context, chatID int64) (string, bool, error)
+}
+
 // msgCacheKey identifies one walked message.
 type msgCacheKey struct {
 	chatID int64
@@ -35,7 +45,7 @@ type msgCacheKey struct {
 // filter context (paths, sidecars) plus the raw message (file references).
 // A nil fctx marks a message re-fetched to hydrate a cached manifest row:
 // it carries a fresh file reference but no walk context, so path and
-// sidecar fall back to store-only fields.
+// sidecar render from manifest data alone.
 type walkedMessage struct {
 	fctx *filters.Context
 	msg  *tg.Message
@@ -90,15 +100,20 @@ type refetchAPI interface {
 }
 
 // runResolver renders final paths, sidecar metadata and file locations from
-// the walked message cache, falling back to store-only fields on cache
-// misses (resume without fresh walk context). It implements
-// download.ItemResolver.
+// the walked message cache, falling back to store-only template resolution
+// on cache misses (resume without fresh walk context); the legacy
+// <chatID>/<msgID>_<index> path survives only for rows without a filename.
+// It implements download.ItemResolver.
 type runResolver struct {
-	root     string
-	template string
-	cache    *messageCache
-	peers    map[int64]tg.InputPeerClass
-	api      refetchAPI
+	root      string
+	template  string
+	naming    string
+	cache     *messageCache
+	peers     map[int64]tg.InputPeerClass
+	api       refetchAPI
+	titles    chatTitleSource
+	titleMu   sync.Mutex
+	titleMemo map[int64]string
 }
 
 // Resolve implements download.ItemResolver for one media row.
@@ -107,8 +122,12 @@ func (r *runResolver) Resolve(item store.MediaItem) (download.Resolved, error) {
 
 	entry, ok := r.cache.get(item.ChatID, item.MessageID)
 	if !ok {
-		resolved.Path = path.Join(r.root, fallbackRelPath(item))
-		resolved.Meta = sidecarFromItem(item, resolved.Path)
+		path, meta, err := r.storeOnlyResolved(item)
+		if err != nil {
+			return download.Resolved{}, err
+		}
+
+		resolved.Path, resolved.Meta = path, meta
 
 		return resolved, nil
 	}
@@ -117,15 +136,19 @@ func (r *runResolver) Resolve(item store.MediaItem) (download.Resolved, error) {
 	resolved.DC = dcFromMessage(entry.msg)
 
 	// Refetched messages (nil fctx) hydrate only the location and DC;
-	// path and sidecar keep the store-only fallback.
+	// path and sidecar render from manifest data alone.
 	if entry.fctx == nil {
-		resolved.Path = path.Join(r.root, fallbackRelPath(item))
-		resolved.Meta = sidecarFromItem(item, resolved.Path)
+		path, meta, err := r.storeOnlyResolved(item)
+		if err != nil {
+			return download.Resolved{}, err
+		}
+
+		resolved.Path, resolved.Meta = path, meta
 
 		return resolved, nil
 	}
 
-	rel, err := download.RenderTemplate(r.template, *entry.fctx, entry.fctx.File)
+	rel, err := r.renderRelPath(*entry.fctx, item.MediaIndex)
 	if err != nil {
 		return download.Resolved{}, fmt.Errorf("render path for %d/%d: %w", item.ChatID, item.MessageID, err)
 	}
@@ -134,6 +157,142 @@ func (r *runResolver) Resolve(item store.MediaItem) (download.Resolved, error) {
 	resolved.Meta = sidecarFromContext(*entry.fctx, resolved.Path)
 
 	return resolved, nil
+}
+
+// renderRelPath renders the configured template for one file, applying the
+// configured naming style first: "msgid" renames the file component to
+// <msgID>_<index><ext> while every directory placeholder keeps rendering
+// from the real context.
+func (r *runResolver) renderRelPath(fctx filters.Context, index int) (string, error) {
+	file := fctx.File
+	if r.naming == namingMsgID {
+		file = msgidFileInfo(fctx.File, fctx.Message.ID, index)
+		fctx.File = file
+	}
+
+	rel, err := download.RenderTemplate(r.template, fctx, file)
+	if err != nil {
+		return "", fmt.Errorf("render template %q: %w", r.template, err)
+	}
+
+	return rel, nil
+}
+
+// msgidFileInfo copies file with its name replaced by the collision-proof
+// <msgID>_<index><ext> form; the extension falls back to the one implied by
+// the original name when FileInfo leaves it blank.
+func msgidFileInfo(file *filters.FileInfo, msgID int64, index int) *filters.FileInfo {
+	named := &filters.FileInfo{}
+
+	if file != nil {
+		*named = *file
+	}
+
+	ext := named.Ext
+	if ext == "" && named.Name != "" {
+		ext = path.Ext(named.Name)
+	}
+
+	named.Name = strconv.FormatInt(msgID, 10) + "_" + strconv.Itoa(index) + ext
+
+	return named
+}
+
+// storeOnlyResolved renders path and metadata for a manifest row whose walk
+// context is gone: filename and date come from the media row, the chat title
+// from the chats table (chat_<id> fallback). Rows without a filename fall
+// back to the legacy <chatID>/<msgID>_<index><ext> path.
+func (r *runResolver) storeOnlyResolved(item store.MediaItem) (string, *download.SidecarMeta, error) {
+	title, err := r.chatTitle(item.ChatID)
+	if err != nil {
+		return "", nil, fmt.Errorf("resolve path for %d/%d: %w", item.ChatID, item.MessageID, err)
+	}
+
+	label := chatLabel(item.ChatID, title)
+
+	rel, ok, err := r.manifestRelPath(item, label)
+	if err != nil {
+		return "", nil, fmt.Errorf("render path for %d/%d: %w", item.ChatID, item.MessageID, err)
+	}
+
+	if !ok {
+		rel = fallbackRelPath(item)
+	}
+
+	final := path.Join(r.root, rel)
+
+	return final, sidecarFromItem(item, final, label), nil
+}
+
+// manifestRelPath renders the configured template from manifest data alone;
+// ok is false only when the row carries no filename at all, the signal for
+// the legacy fallback path.
+func (r *runResolver) manifestRelPath(item store.MediaItem, chatTitle string) (string, bool, error) {
+	if item.Filename == nil {
+		return "", false, nil
+	}
+
+	fctx := filters.Context{
+		Chat:    filters.Chat{ID: item.ChatID, Title: chatTitle},
+		Message: filters.Message{ID: item.MessageID, Date: unixOfDate(item.Date)},
+		File: &filters.FileInfo{
+			Name: *item.Filename,
+			Ext:  path.Ext(*item.Filename),
+		},
+	}
+
+	rel, err := r.renderRelPath(fctx, item.MediaIndex)
+	if err != nil {
+		return "", false, err
+	}
+
+	return rel, true, nil
+}
+
+// chatTitle looks up a chat's stored title, memoized per run; an absent or
+// blank title yields "" so the path renderer's chat_<id> fallback engages.
+func (r *runResolver) chatTitle(chatID int64) (string, error) {
+	r.titleMu.Lock()
+	title, memoized := r.titleMemo[chatID]
+	r.titleMu.Unlock()
+
+	if memoized {
+		return title, nil
+	}
+
+	if r.titles == nil {
+		return "", nil
+	}
+
+	stored, found, err := r.titles.ChatTitle(context.Background(), chatID)
+	if err != nil {
+		return "", fmt.Errorf("read title of chat %d: %w", chatID, err)
+	}
+
+	if !found {
+		stored = ""
+	}
+
+	r.titleMu.Lock()
+	r.titleMemo[chatID] = stored
+	r.titleMu.Unlock()
+
+	return stored, nil
+}
+
+// unixOfDate parses a manifest RFC3339 date; absent or malformed values
+// yield zero, matching the tolerant read sidecarFromItem always had.
+func unixOfDate(value *string) int64 {
+	if value == nil {
+		return 0
+	}
+
+	stamped, err := time.Parse(time.RFC3339, *value)
+	if err != nil {
+		return 0
+	}
+
+	return stamped.Unix()
 }
 
 func (r *runResolver) refetchFor(item store.MediaItem) download.RefetchFunc {
@@ -363,10 +522,12 @@ func sidecarFromContext(fctx filters.Context, finalPath string) *download.Sideca
 }
 
 // sidecarFromItem projects store-only fields onto sidecar metadata for
-// resumed rows whose walk context is gone.
-func sidecarFromItem(item store.MediaItem, finalPath string) *download.SidecarMeta {
+// resumed rows whose walk context is gone; chatTitle carries the label the
+// store-only path renderer picked.
+func sidecarFromItem(item store.MediaItem, finalPath, chatTitle string) *download.SidecarMeta {
 	meta := &download.SidecarMeta{
 		ChatID:     item.ChatID,
+		ChatTitle:  chatTitle,
 		MessageID:  item.MessageID,
 		MediaIndex: item.MediaIndex,
 		Path:       finalPath,
@@ -378,13 +539,17 @@ func sidecarFromItem(item store.MediaItem, finalPath string) *download.SidecarMe
 		}
 	}
 
+	if item.SenderID != nil {
+		meta.SenderID = *item.SenderID
+	}
+
 	meta.Filename = textOrDefault(item.Filename)
 
 	return meta
 }
 
-// fallbackRelPath derives a safe path when no template context exists:
-// <chatID>/<msgID>_<index><ext>.
+// fallbackRelPath is the last resort for rows whose manifest carries no
+// filename at all: <chatID>/<msgID>_<index><ext>.
 func fallbackRelPath(item store.MediaItem) string {
 	name := strconv.FormatInt(item.MessageID, 10) + "_" + strconv.Itoa(item.MediaIndex)
 

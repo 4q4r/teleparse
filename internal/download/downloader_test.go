@@ -272,8 +272,9 @@ func TestManagerSidecarWritten(t *testing.T) {
 
 	st := newTestStore(t)
 
-	root, mgr := newManagerIn(t, st, managerConfig(func(c *download.Config) { c.Output.Sidecar = true }),
-		byteSource("x"), &download.SidecarMeta{MessageID: 42, ChatTitle: "News", Text: "hello"})
+	root, mgr := newManagerIn(t, st, managerConfig(func(c *download.Config) {
+		c.Output.Metadata = config.MetadataFile
+	}), byteSource("x"), &download.SidecarMeta{MessageID: 42, ChatTitle: "News", Text: "hello"})
 	enqueue(t, mgr, queuedItem(1, 42, 1))
 
 	_, err := mgr.Run(context.Background(), "run-sidecar")

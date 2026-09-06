@@ -119,6 +119,10 @@ type Manager struct {
 	chats        map[int64]struct{}
 	duplicates   int64
 	pendingLinks []store.MediaItem
+	// manifestMu serializes per-chat manifest.json read-modify-write
+	// cycles; manifestMuGuard guards the map itself.
+	manifestMu      map[int64]*sync.Mutex
+	manifestMuGuard sync.Mutex
 }
 
 // NewManager returns a Manager over the given state store, pacer, config,
@@ -159,15 +163,16 @@ func NewManager(
 	}
 
 	return &Manager{
-		store:    state,
-		pacer:    pacer,
-		cfg:      cfg,
-		resolve:  resolve,
-		reporter: reporter,
-		items:    asItemReporter(reporter),
-		Link:     os.Link,
-		now:      time.Now,
-		chats:    map[int64]struct{}{},
+		store:      state,
+		pacer:      pacer,
+		cfg:        cfg,
+		resolve:    resolve,
+		reporter:   reporter,
+		items:      asItemReporter(reporter),
+		Link:       os.Link,
+		now:        time.Now,
+		chats:      map[int64]struct{}{},
+		manifestMu: map[int64]*sync.Mutex{},
 	}
 }
 
@@ -720,11 +725,7 @@ func (m *Manager) verifyAndPromote(bookCtx context.Context, state *runState,
 		}
 	}
 
-	if m.cfg.Output.Sidecar && resolved.Meta != nil {
-		if err := writeSidecar(finalPath+".json", resolved.Meta); err != nil {
-			m.reporter.Inc("sidecar_errors", 1)
-		}
-	}
+	m.writeMetadata(item, resolved, finalPath, shaHex)
 
 	if err := m.store.MarkDone(bookCtx, item.ChatID, item.MessageID, item.MediaIndex, finalPath, shaHex); err != nil {
 		m.reporter.Inc("store_errors", 1)

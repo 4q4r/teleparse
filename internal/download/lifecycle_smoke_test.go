@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/4q4r/teleparse/internal/config"
 	"github.com/4q4r/teleparse/internal/download"
 	"github.com/4q4r/teleparse/internal/filters"
 	"github.com/4q4r/teleparse/internal/store"
@@ -105,7 +106,7 @@ func TestLifecycleHappyPathDownloadsAllItems(t *testing.T) {
 
 	contents := map[int64]string{10: "hello world", 11: "data", 20: "payload"}
 
-	cfg := managerConfig(func(c *download.Config) { c.Output.Sidecar = true })
+	cfg := managerConfig(func(c *download.Config) { c.Output.Metadata = config.MetadataFile })
 
 	mgr := download.NewManager(st, newPacer(time.Minute), cfg, resolver, download.NoopReporter{})
 	mgr.Fetch = contentByMsg(contents)

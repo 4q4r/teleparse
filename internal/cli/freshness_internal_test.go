@@ -30,7 +30,7 @@ func freshWalkFixture(t *testing.T, watermark int64, walkedAgo time.Duration) (*
 	}
 
 	app := &App{cfg: config.Default(), paths: &config.Paths{Downloads: t.TempDir()}}
-	_, collector := newRunResolver(app, &fakeHistoryAPI{})
+	_, collector := newRunResolver(app, &fakeHistoryAPI{}, state)
 
 	return state, collector
 }

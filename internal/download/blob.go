@@ -270,11 +270,7 @@ func (m *Manager) linkBlobInto(ctx context.Context, state *runState,
 		return err
 	}
 
-	if m.cfg.Output.Sidecar && resolved.Meta != nil {
-		if err := writeSidecar(finalPath+".json", resolved.Meta); err != nil {
-			m.reporter.Inc("sidecar_errors", 1)
-		}
-	}
+	m.writeMetadata(item, resolved, finalPath, nil)
 
 	if err := m.store.MarkDone(ctx, item.ChatID, item.MessageID, item.MediaIndex, finalPath, nil); err != nil {
 		m.reporter.Inc("store_errors", 1)
