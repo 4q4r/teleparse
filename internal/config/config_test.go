@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/4q4r/teleparse/internal/config"
 
@@ -57,6 +58,75 @@ func TestLoadRejectsBadValues(t *testing.T) {
 	_, _, err := config.Load(path)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, config.ErrBadConcurrency)
+}
+
+func TestScanRewalkAge(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		value   string
+		want    time.Duration
+		wantErr bool
+	}{
+		"seconds":        {value: "30s", want: 30 * time.Second},
+		"minutes":        {value: "10m", want: 10 * time.Minute},
+		"hours":          {value: "1h", want: time.Hour},
+		"compound":       {value: "1h30m", want: 90 * time.Minute},
+		"days":           {value: "2d", want: 48 * time.Hour},
+		"zero disables":  {value: "0", want: 0},
+		"empty disables": {value: "", want: 0},
+		"garbage":        {value: "banana", wantErr: true},
+		"bad unit":       {value: "10x", wantErr: true},
+		"negative":       {value: "-5m", wantErr: true},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := config.Default()
+			cfg.Scan.RewalkMinAge = tc.value
+
+			got, err := cfg.Scan.RewalkAge()
+			if tc.wantErr {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, config.ErrBadRewalkAge)
+
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestRewalkMinAgeDefaultsOnAndSurvivesAbsentKey(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "10m", config.Default().Scan.RewalkMinAge,
+		"the default freshness window is ten minutes")
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(path, []byte("[scan]\nincremental = true\n"), 0o600))
+
+	cfg, _, err := config.Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "10m", cfg.Scan.RewalkMinAge, "an absent key keeps the default, not a disable")
+
+	path = filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(path, []byte("[scan]\nrewalk_min_age = \"0\"\n"), 0o600))
+
+	cfg, _, err = config.Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "0", cfg.Scan.RewalkMinAge, "an explicit zero opts out of freshness")
+
+	path = filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(path, []byte("[scan]\nrewalk_min_age = \"yesterday?\"\n"), 0o600))
+
+	_, _, err = config.Load(path)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, config.ErrBadRewalkAge)
 }
 
 func TestEnvOverrides(t *testing.T) {

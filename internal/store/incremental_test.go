@@ -33,6 +33,66 @@ func TestResetWatermark(t *testing.T) {
 	require.NoError(t, st.ResetWatermark(ctx, -999), "resetting an unknown chat is a no-op")
 }
 
+func TestChatLastWalkedRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	st := openStore(t)
+	chat := store.Chat{ChatID: -1001234, Type: "channel", Title: ptr("News")}
+
+	require.NoError(t, st.UpsertChat(ctx, chat))
+
+	walked, ok, err := st.ChatLastWalked(ctx, chat.ChatID)
+	require.NoError(t, err)
+	assert.False(t, ok, "a chat that was never walked has no last-walked stamp")
+	assert.True(t, walked.IsZero())
+
+	stamped := time.Now().Add(-30 * time.Second).UTC().Truncate(time.Second)
+	require.NoError(t, st.AdvanceWatermark(ctx, chat.ChatID, 900, stamped))
+
+	walked, ok, err = st.ChatLastWalked(ctx, chat.ChatID)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.WithinDuration(t, stamped, walked, time.Second, "the stamp round-trips through RFC3339Nano")
+
+	_, ok, err = st.ChatLastWalked(ctx, -999)
+	require.NoError(t, err)
+	assert.False(t, ok, "an unknown chat was never walked")
+}
+
+func TestAdvanceWatermarkRestampsSyncTimeWhenWatermarkStalls(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	st := openStore(t)
+	chat := store.Chat{ChatID: -1001234, Type: "channel", Title: ptr("News")}
+
+	require.NoError(t, st.UpsertChat(ctx, chat))
+
+	firstWalk := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+	require.NoError(t, st.AdvanceWatermark(ctx, chat.ChatID, 900, firstWalk))
+
+	walked, ok, err := st.ChatLastWalked(ctx, chat.ChatID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.WithinDuration(t, firstWalk, walked, time.Second)
+
+	// A later run walks the chat again but finds no new messages: the
+	// watermark cannot move, yet the walk did happen and must restamp.
+	recentWalk := time.Now().Add(-30 * time.Second).UTC().Truncate(time.Second)
+	require.NoError(t, st.AdvanceWatermark(ctx, chat.ChatID, 900, recentWalk))
+
+	walked, ok, err = st.ChatLastWalked(ctx, chat.ChatID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.WithinDuration(t, recentWalk, walked, time.Second,
+		"an unchanged watermark must still refresh the last-walked stamp")
+
+	wm, err := st.Watermark(ctx, chat.ChatID)
+	require.NoError(t, err)
+	assert.Equal(t, int64(900), wm, "the watermark stays put")
+}
+
 func TestCachedMatchedExcludesFailedRows(t *testing.T) {
 	t.Parallel()
 
