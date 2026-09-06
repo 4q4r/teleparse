@@ -18,6 +18,7 @@ import (
 	"github.com/4q4r/teleparse/internal/config"
 	"github.com/4q4r/teleparse/internal/pace"
 	"github.com/4q4r/teleparse/internal/store"
+	"github.com/4q4r/teleparse/internal/transport"
 
 	tg "github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
@@ -516,8 +517,12 @@ func (m *Manager) downloadWithRetries(runCtx, bookCtx context.Context, runID str
 	// The ladder is exhausted. A cancellation-flavored exhaustion (dropped
 	// connection under takeout, interrupt racing the last attempt) is an
 	// interrupt, not a failure: the item stays resumable with its budget
-	// unburned instead of being burned to terminal failed.
-	if isCancellationErr(lastErr) {
+	// unburned instead of being burned to terminal failed. A dead-carrier
+	// exhaustion — a local proxy staying dead for minutes kills every
+	// write with EPIPE or a reset — settles the same way: the run parks
+	// resumable rather than burning files to permanent failure while the
+	// carrier is down.
+	if isCancellationErr(lastErr) || transport.IsDeadTransport(lastErr) {
 		m.interruptItem(bookCtx, state, item, lastErr)
 
 		return
@@ -587,7 +592,11 @@ func (m *Manager) handleFailure(runCtx, bookCtx context.Context, runID string, s
 		// connection (gotd's RPC engine closes with "engine forcibly
 		// closed" when its pooled connection dies mid-request), not a user
 		// interrupt: the ladder retries it like any transient error and a
-		// later exhaustion settles it as interrupted.
+		// later exhaustion settles it as interrupted. Dead-carrier errors
+		// (EPIPE/reset from a local proxy) land here too: retryable with
+		// re-entry at the CURRENT .part offset — gotd's reconnection loop
+		// replaces the primary connection in the background, so the retry
+		// rides a fresh proxied dial.
 		return m.handleFloodOrRefetch(runCtx, bookCtx, runID, state, item, err, attempt, resolved, location)
 	}
 }
