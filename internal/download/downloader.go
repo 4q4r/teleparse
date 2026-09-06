@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -94,10 +95,46 @@ type Result struct {
 	Linked int64
 	// LinkCopies counts how many of those links fell back to byte copies
 	// on filesystems without hardlink support.
-	LinkCopies   int64
-	Parked       bool
-	ResumeAt     time.Time
+	LinkCopies int64
+	Parked     bool
+	ResumeAt   time.Time
+	// FailReasons tallies the error text of every failed item; the webhook
+	// surface ranks it through TopFailures.
+	FailReasons  map[string]int64
 	FailedByChat map[int64]int64
+}
+
+// TopFailures returns up to limit failure reasons of the run, most
+// frequent first with ties broken lexically; the slice is never nil.
+func (r Result) TopFailures(limit int) []string {
+	type reasonCount struct {
+		reason string
+		count  int64
+	}
+
+	counts := make([]reasonCount, 0, len(r.FailReasons))
+	for reason, count := range r.FailReasons {
+		counts = append(counts, reasonCount{reason: reason, count: count})
+	}
+
+	sort.Slice(counts, func(first, second int) bool {
+		if counts[first].count != counts[second].count {
+			return counts[first].count > counts[second].count
+		}
+
+		return counts[first].reason < counts[second].reason
+	})
+
+	reasons := make([]string, 0, min(limit, len(counts)))
+	for _, entry := range counts {
+		if len(reasons) >= limit {
+			break
+		}
+
+		reasons = append(reasons, entry.reason)
+	}
+
+	return reasons
 }
 
 // Manager coordinates the download pipeline: enqueue with dedupe, paced
@@ -274,6 +311,7 @@ func (m *Manager) Run(ctx context.Context, runID string) (Result, error) {
 
 	state := &runState{res: Result{
 		FailedByChat: map[int64]int64{},
+		FailReasons:  map[string]int64{},
 		// Enqueue ran before Run; carry its duplicate count into the
 		// reported outcome.
 		Duplicates: m.duplicates,
@@ -542,6 +580,7 @@ func (m *Manager) downloadWithRetries(runCtx, bookCtx context.Context, runID str
 	state.mutate(func(res *Result) {
 		res.Failed++
 		res.FailedByChat[item.ChatID]++
+		res.FailReasons[lastErr.Error()]++
 	})
 
 	m.reporter.Inc("failed", reportEveryAttempts)
@@ -896,6 +935,7 @@ func (m *Manager) failItem(ctx context.Context, state *runState,
 	state.mutate(func(res *Result) {
 		res.Failed++
 		res.FailedByChat[item.ChatID]++
+		res.FailReasons[err.Error()]++
 	})
 
 	m.reporter.Inc("failed", reportEveryAttempts)

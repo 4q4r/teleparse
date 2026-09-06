@@ -91,6 +91,8 @@ func getCmd(app *App) *cobra.Command {
 	cmd.Flags().StringVar(&getOpts.mediaDir, "media-dir", "",
 		"directory holding the export's media (default: the export file's directory)")
 	cmd.Flags().String("profile", "", "named filter profile overlay")
+	addNotifyWebhookFlag(cmd)
+	addRewriteExtFlag(cmd)
 	addSilentOutputMirror(cmd)
 	addFilterFlags(cmd, &filterSet)
 
