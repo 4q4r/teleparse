@@ -19,6 +19,7 @@ SOCKS4/5, HTTP CONNECT, MTProto-proxy (`dd`/`ee` fake-TLS) or the new **WEB-prox
 - [Quickstart](#quickstart)
 - [The one-liner this was built for](#the-one-liner-this-was-built-for)
 - [Commands](#commands)
+- [Getting specific messages (`get`)](#getting-specific-messages-get)
 - [Authentication](#authentication)
 - [Filter reference](#filter-reference)
 - [Configuration](#configuration)
@@ -138,6 +139,7 @@ server quirks that apply to your combination.
 | `chats list \| show` | dialogs with types/usernames/protected flags |
 | `scan [CHATS] [FILTERS]` | `dl --dry-run`: writes manifest, downloads nothing |
 | `dl [CHATS] [FILTERS]` | download; `--account a,b\|all`, `--takeout`, `--count-only` |
+| `get [LINKS]... [FILTERS]` | one-shot fetch of specific messages by t.me link, id list or range; `--group` (default) expands albums, `--from-export` ingests a Telegram Desktop export (see below); every dl flag (`--dry-run`, `--count-only`, `--takeout`, filters) applies |
 | `sync [CHATS]` | incremental via per-chat watermarks (cron-friendly) |
 | `resume [RUN_ID]` | resume runs parked by FloodWait or interrupted |
 | `runs list \| show \| clean` | run history |
@@ -159,11 +161,57 @@ Global flags:
 | `--no-ascii` | plain ASCII output: line-per-item progress instead of the live redraw UI, ASCII-only tables and bars (also disables colors) |
 | `--no-color` | disable colored output; identical to `NO_COLOR=1`. Colors are on only when stdout is a terminal and none of `--no-color` / `--no-ascii` / `NO_COLOR` applies — the systemd/docker/plain-pipe cases always get plain output |
 
+## Getting specific messages (`get`)
+
+`get` is the one-shot fetcher: it takes t.me message links instead of chat
+specs, resolves each chat through the same dialog cache `dl` uses, fetches
+the explicit message ids (`channels.getMessages` for channels,
+`messages.getMessages` otherwise) and runs the exact dl pipeline on the
+result — filters, manifest, preview, downloads, dedupe. It never touches
+per-chat watermarks, so later incremental walks still cover everything.
+
+Link grammar (mix and match; same-chat links merge):
+
+| Form | Example | Meaning |
+|---|---|---|
+| `t.me/<user>/<id>` (+ `https://`, `telegram.me`) | `https://t.me/news/100` | message 100 of @news |
+| id list / range | `t.me/news/100,102` · `t.me/news/100-200` | explicit ids (ranges expand; max span 10000) |
+| private channel | `t.me/c/123456/789` | message 789 of internal channel 123456 |
+| forum topic path | `t.me/forum/7/89` · `t.me/c/123456/7/89` | message 89 inside topic 7 (getReplies context) |
+| comment thread | `t.me/news/500?thread=550` · `?comment=550` | comment 550 under post 500 (getReplies context) |
+| tg scheme | `tg://resolve?domain=news&post=100` | message 100 of @news |
+| `t.me/<user>` (no id) | — | rejected: `get` is message-scoped; use `dl` for whole chats |
+
+Albums: a fetched message with a `grouped_id` triggers one sibling fetch
+(`id±9`, same group kept — Telegram albums hold at most ten items), so a
+single link to one photo of a ten-shot album downloads all ten.
+`--group=false` disables it. All filters apply on top
+(`teleparse get t.me/news/100-200 --media photo --min-size 1MB`).
+
+### `--from-export`: adopt a Telegram Desktop export
+
+```shell
+teleparse get --from-export ~/ChatExport_2026-09-06/result.json
+teleparse get --from-export result.json --chat @news --dry-run
+```
+
+Ingests a Desktop-export `result.json` as a download manifest: every
+file-bearing message becomes a manifest row keyed by the export's own chat
+identity (or `--chat` to override; `--media-dir` when the media lives
+elsewhere). **Adoption**: files already on disk under the export directory
+are hardlinked (byte-copied only across filesystems) into the blob store
+and the final path, hashed immediately and marked done — no re-download.
+Only absent files (or size mismatches) queue for download; the command
+prints `adopted N, queued M`. Filters apply to export rows too (media kind,
+size, extension, date — fields the export cannot know, like sender, stay
+unset and pass). Caveat: export rows carry deterministic pseudo media ids,
+so a later full walk of the same chat may re-fetch a file an export
+import already adopted.
+
 ## Authentication
 
 Telegram API credentials (`api_id` / `api_hash`) are resolved once per run,
 highest first:
-
 1. `TELEPARSE_API_ID` + `TELEPARSE_API_HASH` environment variables
 2. `~/.config/teleparse/credentials.toml` (0600, dir 0700):
 

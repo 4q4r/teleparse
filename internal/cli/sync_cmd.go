@@ -19,7 +19,7 @@ func syncCmd(app *App) *cobra.Command {
 			return runDownloadCommand(app, c, args, &filterSet, flags, runMode{
 				syncMode: true,
 				fullWalk: flags.full,
-			}, "")
+			}, "", nil)
 		},
 	}
 	cmd.Flags().String("profile", "", "named filter profile overlay")

@@ -362,6 +362,24 @@ func (m *Manager) linkOrCopy(state *runState, src, dst string) error {
 	return nil
 }
 
+// LinkOrCopyFile hardlinks src onto dst with a byte-copy fallback for
+// filesystems without links (EXDEV, unsupported); a dst that appeared
+// meanwhile counts as served. It is the link machinery behind export-file
+// adoption, which owes no counters.
+func LinkOrCopyFile(src, dst string) error {
+	if err := os.Link(src, dst); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return nil
+		}
+
+		if copyErr := copyFile(src, dst); copyErr != nil {
+			return fmt.Errorf("link %s -> %s: %w; copy fallback: %w", src, dst, err, copyErr)
+		}
+	}
+
+	return nil
+}
+
 // copyFile duplicates the src bytes onto dst with download file
 // permissions.
 func copyFile(src, dst string) error {
