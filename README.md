@@ -383,6 +383,15 @@ What is cached:
   new matches only. Incremental `dl` runs re-offer manifest rows that still
   owe a download (discovered by a scan, queued, failed) — including rows
   from runs with different filters, because the manifest is per-chat.
+- **Walk freshness** (`[scan] rewalk_min_age`, default `"10m"`): a chat
+  whose last successful walk is younger than the window is not walked again
+  at all — not even the newest-id probe. A run restarted seconds after a
+  stop settles each recently-walked chat instantly as a settled progress
+  line with its cached match count, and its pending manifest downloads are
+  still served, instead of re-probing and re-paging all chats for nothing.
+  Chats never walked (no watermark) or older than the window walk normally.
+  `"0"` walks every chat on every run; the value is a relative duration
+  (`30s`, `10m`, `1h`).
 
 What invalidates it:
 
@@ -392,8 +401,8 @@ What invalidates it:
   the watermark, the chat was mass-cleared: the watermark resets and the
   chat is re-walked in full (`history cleared: <title> (re-walking)`).
 - **`--full`** on `dl`/`scan`/`sync` forces one complete re-walk of every
-  chat, ignoring the watermarks. `[scan] incremental = false` makes every
-  run a full walk.
+  chat, ignoring the watermarks **and** the walk freshness window.
+  `[scan] incremental = false` makes every run a full walk.
 
 What is **not** detected (accepted trade-off): single old deletions and
 edits older than Telegram's 48-hour edit window never invalidate anything —

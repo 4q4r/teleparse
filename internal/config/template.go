@@ -137,6 +137,14 @@ func templateTail() string {
 # message dropped below its watermark. Pass --full to any of dl/scan/sync
 # to force one complete re-walk; set false here to always walk in full.
 
+# rewalk_min_age = "10m"
+# Per-chat walk freshness: a chat walked less than this ago is not walked
+# again at all - a run restarted seconds after a stop settles each
+# recently-walked chat instantly from the cached manifest (its pending
+# downloads are still served) instead of re-probing every chat. Relative
+# duration (30s, 10m, 1h); "0" walks every chat on every run. --full
+# ignores freshness along with watermarks.
+
 # [output] controls where and how downloaded files land.
 
 [output]
