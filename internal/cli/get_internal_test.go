@@ -24,7 +24,7 @@ func newGetFixture(t *testing.T) *walkCollector {
 	require.NoError(t, state.UpsertChat(t.Context(), store.Chat{ChatID: 30, Type: "channel", Title: ptr("News")}))
 
 	app := &App{cfg: config.Default(), paths: &config.Paths{Downloads: t.TempDir()}}
-	_, collector := newRunResolver(app, &fakeRefetchAPI{}, state)
+	_, collector := newRunResolver(app, &fakeRefetchAPI{}, state, false)
 
 	return collector
 }

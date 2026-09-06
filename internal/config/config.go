@@ -139,6 +139,19 @@ type Output struct {
 	Sidecar    bool   `toml:"sidecar"`     // deprecated bool; maps to metadata when metadata is unset
 	PartSuffix string `toml:"part_suffix"` // in-progress suffix
 	Sha256     bool   `toml:"sha256"`      // hash after download
+	// RewriteExt renames a downloaded file's on-disk extension to the
+	// canonical one for its recorded mime type when the two disagree;
+	// compound names such as .tar.gz and the manifest's own filename
+	// field are never touched.
+	RewriteExt bool `toml:"rewrite_ext"`
+}
+
+// Run carries per-run notification settings.
+type Run struct {
+	// NotifyWebhook receives a JSON payload when a dl/sync/get run ends
+	// and when a flood wait parks it; "" disables delivery. Env:
+	// TELEPARSE_WEBHOOK.
+	NotifyWebhook string `toml:"notify_webhook"`
 }
 
 // Hooks run after each successful download. Templates may use {path}.
@@ -220,6 +233,7 @@ type Config struct {
 	Scan     Scan               `toml:"scan"`
 	Filters  Filters            `toml:"filters"`
 	Hooks    Hooks              `toml:"hooks"`
+	Run      Run                `toml:"run"`
 	Profiles map[string]Filters `toml:"profiles"`
 }
 

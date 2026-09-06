@@ -105,15 +105,16 @@ type refetchAPI interface {
 // <chatID>/<msgID>_<index> path survives only for rows without a filename.
 // It implements download.ItemResolver.
 type runResolver struct {
-	root      string
-	template  string
-	naming    string
-	cache     *messageCache
-	peers     map[int64]tg.InputPeerClass
-	api       refetchAPI
-	titles    chatTitleSource
-	titleMu   sync.Mutex
-	titleMemo map[int64]string
+	root       string
+	template   string
+	naming     string
+	rewriteExt bool
+	cache      *messageCache
+	peers      map[int64]tg.InputPeerClass
+	api        refetchAPI
+	titles     chatTitleSource
+	titleMu    sync.Mutex
+	titleMemo  map[int64]string
 }
 
 // Resolve implements download.ItemResolver for one media row.
@@ -153,10 +154,23 @@ func (r *runResolver) Resolve(item store.MediaItem) (download.Resolved, error) {
 		return download.Resolved{}, fmt.Errorf("render path for %d/%d: %w", item.ChatID, item.MessageID, err)
 	}
 
-	resolved.Path = path.Join(r.root, rel)
-	resolved.Meta = sidecarFromContext(*entry.fctx, resolved.Path)
+	final := r.rewriteExtPath(path.Join(r.root, rel), item.Mime)
+
+	resolved.Path = final
+	resolved.Meta = sidecarFromContext(*entry.fctx, final)
 
 	return resolved, nil
+}
+
+// rewriteExtPath applies the optional canonical-extension rewrite to a
+// rendered final path; a no-op unless the run enabled it or the row records
+// no mime type.
+func (r *runResolver) rewriteExtPath(final string, mimeType *string) string {
+	if !r.rewriteExt || mimeType == nil {
+		return final
+	}
+
+	return download.RewriteExtPath(final, *mimeType)
 }
 
 // renderRelPath renders the configured template for one file, applying the
@@ -219,7 +233,7 @@ func (r *runResolver) storeOnlyResolved(item store.MediaItem) (string, *download
 		rel = fallbackRelPath(item)
 	}
 
-	final := path.Join(r.root, rel)
+	final := r.rewriteExtPath(path.Join(r.root, rel), item.Mime)
 
 	return final, sidecarFromItem(item, final, label), nil
 }
