@@ -666,20 +666,21 @@ func downloadRun(ctx context.Context, cmd *cobra.Command, state *store.Store, ap
 	premium := tg.NewAccountManager(app.paths.AccountsDir).
 		AccountPremium(ctx, account, client.Self)
 
-	threads, connections := app.cfg.Download.Effective(premium.Premium)
+	_, connections := app.cfg.Download.Effective(premium.Premium)
 
-	if !silent && (threads != app.cfg.Download.Threads || connections != app.cfg.Download.Connections) {
-		if err := printLine(cmd, "premium boost: threads %d, connections %d (source: %s)\n",
-			threads, connections, premium.Source); err != nil {
+	if !silent && connections != app.cfg.Download.Connections {
+		if err := printLine(cmd, "premium boost: connections %d (source: %s)\n",
+			connections, premium.Source); err != nil {
 			return err
 		}
 	}
 
-	// Parallel-connection engine: per-DC media pools with a home-DC
-	// fallback; pool failures degrade to the single primary connection.
-	// Under an ACTIVE takeout session upload.getFile outside the session
-	// fails instantly with 403 TAKEOUT_REQUIRED, so downloads must ride
-	// the takeout invoker (single connection; ranged threads multiplex).
+	// Ranged-engine wiring: per-DC media pools with a home-DC fallback
+	// resolve each item's RPC target; pool failures degrade to the single
+	// primary connection. Under an ACTIVE takeout session upload.getFile
+	// outside the session fails instantly with 403 TAKEOUT_REQUIRED, so
+	// downloads must ride the takeout invoker (nil pools). Both paths ride
+	// the ranged engine: transfers resume at the exact .part offset.
 	var pools download.InvokerSource
 
 	if takeoutActive {
@@ -703,11 +704,8 @@ func downloadRun(ctx context.Context, cmd *cobra.Command, state *store.Store, ap
 		Root:         app.paths.Downloads,
 		FileMaxSize:  takeoutCap,
 	}, resolver, reporter)
-	// Nil pools under takeout select the ranged engine inside FetchFor:
-	// one connection means nothing to parallelize, and drops must resume
-	// from the exact on-disk offset.
+
 	mgr.Fetch = download.FetchFor(pools, api, download.FetchOptions{
-		Threads:  threads,
 		Reporter: reporter,
 	})
 

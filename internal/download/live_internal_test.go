@@ -177,6 +177,59 @@ func TestLiveStateThrottleNotice(t *testing.T) {
 	}
 }
 
+// TestLiveStateStallMarkerAppearsAfterQuietSpells pins the UX gap the
+// 0B/s freeze exposed: an active transfer with no byte delta for the
+// stall window renders the stalled marker so users can tell a real stall
+// from slow progress.
+func TestLiveStateStallMarkerAppearsAfterQuietSpells(t *testing.T) {
+	t.Parallel()
+
+	state, clock := newTestState()
+
+	state.itemStart("k", "frozen.bin", 1000, 0)
+
+	state.itemProgress("k", 900)
+
+	clock.advance(liveSpeedWindow)
+
+	healthy := state.lines(100)
+	if contains(healthy[0], "stalled") {
+		t.Errorf("a fresh transfer must not render the stall marker: %q", healthy[0])
+	}
+
+	clock.advance(liveStalledAfter)
+
+	stalled := state.lines(100)
+	if !contains(stalled[0], "stalled") {
+		t.Errorf("a transfer quiet past the stall window must render the marker: %q", stalled[0])
+	}
+}
+
+// TestLiveStateStallMarkerRecoversOnDelta pins that the marker clears as
+// soon as bytes flow again.
+func TestLiveStateStallMarkerRecoversOnDelta(t *testing.T) {
+	t.Parallel()
+
+	state, clock := newTestState()
+
+	state.itemStart("k", "frozen.bin", 1000, 0)
+
+	state.itemProgress("k", 500)
+
+	clock.advance(liveStalledAfter + time.Second)
+
+	if !contains(state.lines(100)[0], "stalled") {
+		t.Fatalf("precondition: the marker must be visible before recovery")
+	}
+
+	state.itemProgress("k", 100)
+
+	recovered := state.lines(100)
+	if contains(recovered[0], "stalled") {
+		t.Errorf("a fresh delta must clear the stall marker: %q", recovered[0])
+	}
+}
+
 func TestLiveStateSummaryLine(t *testing.T) {
 	t.Parallel()
 

@@ -120,15 +120,17 @@ type Hooks struct {
 	PostDownload []string `toml:"post_download"`
 }
 
-// Download tunes transfer speed: per-file ranged threads and the connection
-// pool size opened per data center. Threads multiply within one file's
-// transfer; connections are shared by every download routed to that DC.
+// Download tunes transfer speed: the connection pool size opened per data
+// center. Connections are shared by every download routed to that DC;
+// Threads is accepted for compatibility — the ranged engine transfers one
+// chunk stream per file, so throughput scales with connections and pacing
+// concurrency.
 type Download struct {
-	Threads     int `toml:"threads"`     // ranged parts fetched in parallel per file
+	Threads     int `toml:"threads"`     // compatibility knob; no engine effect
 	Connections int `toml:"connections"` // pooled MTProto connections per DC
 	// PremiumBoost upgrades the built-in default sizing to the premium
-	// preset (threads 8 / connections 8) when the account is Telegram
-	// Premium and neither knob was customized in the config file.
+	// preset (connections 8) when the account is Telegram Premium and
+	// neither knob was customized in the config file.
 	PremiumBoost bool `toml:"premium_boost"`
 }
 
