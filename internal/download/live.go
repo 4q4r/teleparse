@@ -14,15 +14,17 @@ import (
 
 // Live UI tuning: refresh cadence, the sliding speed window, how many active
 // transfers stay visible before collapsing into an overflow note, the bar
-// width, the name column width and the assumed terminal width until the
-// first WindowSizeMsg arrives.
+// width, the name column width, the assumed terminal width until the
+// first WindowSizeMsg arrives, and how long an active transfer may stay
+// byte-silent before the stalled marker renders.
 const (
-	liveRefresh     = 100 * time.Millisecond
-	liveSpeedWindow = 3 * time.Second
-	maxVisibleItems = 6
-	liveBarWidth    = 20
-	liveNameWidth   = 24
-	liveDefaultWide = 80
+	liveRefresh      = 100 * time.Millisecond
+	liveSpeedWindow  = 3 * time.Second
+	maxVisibleItems  = 6
+	liveBarWidth     = 20
+	liveNameWidth    = 24
+	liveDefaultWide  = 80
+	liveStalledAfter = 10 * time.Second
 )
 
 // speedSample is one point of the cumulative-bytes sliding window used to
@@ -38,6 +40,9 @@ type liveItem struct {
 	total   int64
 	current int64 // resume offset plus freshly written bytes
 	samples []speedSample
+	// lastDeltaAt is when current last advanced; a transfer quiet past
+	// liveStalledAfter renders the stalled marker.
+	lastDeltaAt time.Time
 }
 
 // liveState is the pure, terminal-free model behind the live download view:
@@ -75,7 +80,7 @@ func (s *liveState) itemStart(key, name string, total, offset int64) {
 		return
 	}
 
-	item := &liveItem{name: name, total: total, current: offset}
+	item := &liveItem{name: name, total: total, current: offset, lastDeltaAt: s.now()}
 
 	item.samples = append(item.samples, speedSample{at: s.now(), bytes: offset})
 
@@ -90,6 +95,7 @@ func (s *liveState) itemProgress(key string, delta int64) {
 	}
 
 	item.current += delta
+	item.lastDeltaAt = s.now()
 
 	at := s.now()
 
@@ -262,7 +268,9 @@ func (s *liveState) lines(width int) []string {
 // itemLine renders one active transfer: name, ASCII bar, percent, speed,
 // position over total and eta when both are known. The rendered position
 // clamps at the total so a mid-flight over-count can never paint more than
-// a full bar.
+// a full bar. A transfer active with no byte delta for liveStalledAfter
+// renders the dim stalled marker — quiet-but-alive must not read as
+// progress.
 func (s *liveState) itemLine(item *liveItem, now time.Time, width int) string {
 	name := truncateLive(item.name, liveNameWidth)
 
@@ -284,6 +292,10 @@ func (s *liveState) itemLine(item *liveItem, now time.Time, width int) string {
 
 	if remaining := item.total - current; item.total > 0 && rate > 0 && remaining > 0 {
 		parts = append(parts, "eta "+humanDuration(time.Duration(float64(time.Second)*float64(remaining)/rate)))
+	}
+
+	if now.Sub(item.lastDeltaAt) >= liveStalledAfter {
+		parts = append(parts, "stalled")
 	}
 
 	line := joinSpaces(parts)

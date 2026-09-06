@@ -267,9 +267,9 @@ requests_per_minute  = 0     # optional global token bucket
 retry_max            = 4
 
 [download]
-threads     = 4        # ranged parts in parallel per file (1-16)
+threads     = 4        # accepted for compatibility; per-file transfer is sequential
 connections = 3        # pooled MTProto connections per DC (1-8)
-premium_boost = true   # premium preset (8/8) on auto-detected premium accounts
+premium_boost = true   # premium preset (connections 8) on auto-detected premium accounts
 
 [scan]
 incremental = true     # watermark-cached walks; --full overrides per run
@@ -295,25 +295,31 @@ Downloads ride **real parallel connections**, not one multiplexed pipe:
 - `[download] connections` (1-8, default 3) — one MTProto connection pool per
   data center, reused by every file routed there; files know their DC from the
   manifest, unknown DCs start on the home pool and follow a `FILE_MIGRATE`
-  retry to the right pool automatically.
-- `[download] threads` (1-16, default 4) — ranged parts fetched in parallel
-  within one file (512 KiB parts, gotd downloader).
+  answer to the right pool automatically.
+- Every file transfers as a sequential stream of ranged 512 KiB requests that
+  resumes at the exact on-disk offset — a resumed `.part` file never
+  re-downloads its bytes. Each chunk request takes an idle pooled connection,
+  so concurrent files (see `[pacing] concurrency`) interleave across the pool;
+  `[download] threads` is accepted for compatibility and no longer drives the
+  engine.
 - Defaults mirror official clients (TDLib = 2 conns/DC); the **turbo preset**
-  for fat pipes is `threads = 8, connections = 6`. Never exceed ~20 connections
+  for fat pipes is `connections = 6`. Never exceed ~20 connections
   per DC: past that Telegram answers `FLOOD_PREMIUM_WAIT` — an account-level
   throttle (Telegram Premium removes it). Short waits are auto-slept and shown
   in the live UI as `throttled Ns`; only waits beyond `flood_sleep_threshold`
   park the run.
 - **Premium autodetect**: with `premium_boost = true` (default), teleparse
   detects Telegram Premium accounts on connect (cached 24h per account) and
-  upgrades the default sizing to the premium preset — 8 pooled connections per
-  DC and 8 threads — matching TDLib's premium download envelope and lifting
-  the account-level media throttle. Explicit `threads`/`connections` you set
-  always win; `auth status` and `doctor` show the detected state and its
+  upgrades the default connection sizing to the premium preset — 8 pooled
+  connections per DC — matching TDLib's premium download envelope and lifting
+  the account-level media throttle. Explicit `connections` you set
+  always wins; `auth status` and `doctor` show the detected state and its
   source. Failed detection falls back to the cache (or non-premium) and never
   blocks a download.
 - Progress UI: on a TTY `dl`/`sync` render a live per-file view (percent, bar,
-  speed, eta, totals); piped output falls back to one line per finished file;
+  speed, eta, totals); an active file with no byte progress for 10s renders a
+  `stalled` marker on its line; piped output falls back to one line per
+  finished file;
   `-s`/`--silent` suppresses everything but errors and actionable results.
   On `dl`/`scan`/`sync` the plain `--silent` long name stays the
   silently-sent-messages filter — use `-s` there. `--no-ascii` forces the

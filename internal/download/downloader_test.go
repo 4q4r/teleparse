@@ -483,8 +483,8 @@ func TestManagerFileSizeMismatchRetries(t *testing.T) {
 	enqueue(t, mgr, queuedItem(1, 4, 100))
 
 	res, err := mgr.Run(context.Background(), "run-mismatch")
-
 	require.NoError(t, err)
+
 	assert.EqualValues(t, 0, res.Downloaded)
 	assert.EqualValues(t, 1, res.Failed)
 
@@ -492,42 +492,3 @@ func TestManagerFileSizeMismatchRetries(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, store.StatusFailed, row.Status)
 }
-
-func TestSkipWriterAtDropsBelowOffset(t *testing.T) {
-	t.Parallel()
-
-	var buf []byte
-
-	dest := writerAtFunc(func(p []byte, off int64) (int, error) {
-		end := off + int64(len(p))
-		if int(end) > len(buf) {
-			grown := make([]byte, end)
-			copy(grown, buf)
-			buf = grown
-		}
-
-		copy(buf[off:end], p)
-
-		return len(p), nil
-	})
-
-	skipped := download.NewSkipWriterAt(dest, 5)
-
-	written, err := skipped.WriteAt([]byte("abcde"), 0)
-	require.NoError(t, err)
-	assert.Equal(t, 5, written)
-	assert.Empty(t, buf)
-
-	written, err = skipped.WriteAt([]byte("fghij"), 5)
-	require.NoError(t, err)
-	assert.Equal(t, 5, written)
-
-	written, err = skipped.WriteAt([]byte("KLMNO"), 3)
-	require.NoError(t, err)
-	assert.Equal(t, 5, written)
-	assert.Equal(t, "MNOij", string(buf[5:]), "straddling write lands its tail at the offset")
-}
-
-type writerAtFunc func(p []byte, off int64) (int, error)
-
-func (f writerAtFunc) WriteAt(p []byte, off int64) (int, error) { return f(p, off) }
