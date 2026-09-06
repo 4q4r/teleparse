@@ -212,7 +212,7 @@ func TestWithCachedPendingSkipsFreshWalkedTargets(t *testing.T) {
 
 	app := &App{cfg: config.Default(), paths: &config.Paths{Downloads: t.TempDir()}}
 
-	_, collector := newRunResolver(app, &fakeHistoryAPI{}, state)
+	_, collector := newRunResolver(app, &fakeHistoryAPI{}, state, false)
 	collector.incremental[30] = true
 
 	merged, err := withCachedPending(ctx, state,

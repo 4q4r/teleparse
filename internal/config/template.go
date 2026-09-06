@@ -186,6 +186,27 @@ func templateTail() string {
 # sha256 = false
 # Hash each file after download (stored in the state DB).
 
+# rewrite_ext = false
+# Rewrite a downloaded file's on-disk extension to the canonical one for
+# the mime type Telegram recorded (a .rar-named upload that is really
+# application/zip lands as .zip) when they disagree. Matching (or
+# equivalent, e.g. .jpg/.jpeg) extensions, unknown mime types and compound
+# names such as .tar.gz are never touched; the manifest keeps the original
+# Telegram file name. --rewrite-ext enables it per run.
+` + templateRunHooksTail()
+}
+
+// templateRunHooksTail holds the run-notification and hooks sections.
+func templateRunHooksTail() string {
+	return `# [run] tunes per-run notifications.
+
+[run]
+# notify_webhook = ""
+# POST a JSON run summary to this URL when a dl/sync/get run ends and when
+# a flood wait parks it (payload: counters, duration, top failure reasons;
+# 5s timeout, one retry, failures never fail the run). Also set via
+# TELEPARSE_WEBHOOK; --notify-webhook wins per invocation; empty disables.
+
 # [hooks] runs shell commands around downloads.
 
 [hooks]

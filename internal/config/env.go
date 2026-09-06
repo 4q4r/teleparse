@@ -13,7 +13,8 @@ const EnvVarPrefix = "TELEPARSE"
 // applyEnv overlays TELEPARSE_* environment variables onto cfg and picks up
 // the standard proxy environment when no explicit override is set.
 // Supported: TELEPARSE_ACCOUNT, TELEPARSE_PROXY, TELEPARSE_TAKEOUT,
-// TELEPARSE_CONCURRENCY, TELEPARSE_ROOT, TELEPARSE_PROFILE (profile name applied by caller).
+// TELEPARSE_CONCURRENCY, TELEPARSE_ROOT, TELEPARSE_WEBHOOK,
+// TELEPARSE_PROFILE (profile name applied by caller).
 // API credentials are resolved separately (see credentials.go): environment
 // first, then the credentials file.
 func applyEnv(cfg *Config) error {
@@ -37,6 +38,10 @@ func applyEnv(cfg *Config) error {
 
 	if v := env("ROOT"); v != "" {
 		cfg.Output.Root = v
+	}
+
+	if v := env("WEBHOOK"); v != "" {
+		cfg.Run.NotifyWebhook = v
 	}
 
 	return nil

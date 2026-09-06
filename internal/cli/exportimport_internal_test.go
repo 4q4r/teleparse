@@ -86,7 +86,7 @@ func newAdoptFixture(t *testing.T) (*cobra.Command, *store.Store, *runResolver, 
 	require.NoError(t, state.UpsertChat(t.Context(), store.Chat{ChatID: 30, Type: "channel", Title: ptr("News")}))
 
 	app := &App{cfg: config.Default(), paths: &config.Paths{Downloads: t.TempDir()}}
-	resolver, collector := newRunResolver(app, &fakeRefetchAPI{}, state)
+	resolver, collector := newRunResolver(app, &fakeRefetchAPI{}, state, false)
 
 	cmd, _ := newOutCmd()
 

@@ -15,6 +15,7 @@ import (
 	"github.com/4q4r/teleparse/internal/config"
 	"github.com/4q4r/teleparse/internal/download"
 	"github.com/4q4r/teleparse/internal/filters"
+	"github.com/4q4r/teleparse/internal/notify"
 	"github.com/4q4r/teleparse/internal/pace"
 	"github.com/4q4r/teleparse/internal/scan"
 	"github.com/4q4r/teleparse/internal/store"
@@ -111,6 +112,8 @@ func dlCmd(app *App) *cobra.Command {
 	cmd.Flags().BoolVar(&flags.takeout, "takeout", false, "wrap session in takeout mode (lower flood limits)")
 	cmd.Flags().BoolVar(&flags.noTakeout, "no-takeout", false, "never use takeout mode, even if auto would engage")
 	addFullWalkFlag(cmd, &flags)
+	addNotifyWebhookFlag(cmd)
+	addRewriteExtFlag(cmd)
 	cmd.Flags().String("profile", "", "named filter profile overlay")
 	addSilentOutputMirror(cmd)
 	addFilterFlags(cmd, &filterSet)
@@ -399,7 +402,7 @@ func executeRun(ctx context.Context, cmd *cobra.Command, app *App, account, prof
 		}
 	}
 
-	resolver, collector := newRunResolver(app, api, state)
+	resolver, collector := newRunResolver(app, api, state, rewriteExtMode(app.cfg, cmd))
 
 	rewalkMinAge, err := app.cfg.Scan.RewalkAge()
 	if err != nil {
@@ -694,18 +697,19 @@ func (c *walkCollector) observe(fctx filters.Context, msg *tgapi.Message) {
 	c.items = append(c.items, item)
 }
 
-func newRunResolver(app *App, api refetchAPI, state *store.Store) (*runResolver, *walkCollector) {
+func newRunResolver(app *App, api refetchAPI, state *store.Store, rewriteExt bool) (*runResolver, *walkCollector) {
 	cache := newMessageCache(msgCacheLimit)
 
 	resolver := &runResolver{
-		root:      app.paths.Downloads,
-		template:  app.cfg.Output.Template,
-		naming:    app.cfg.Output.Naming,
-		cache:     cache,
-		peers:     map[int64]tgapi.InputPeerClass{},
-		api:       api,
-		titles:    state,
-		titleMemo: map[int64]string{},
+		root:       app.paths.Downloads,
+		template:   app.cfg.Output.Template,
+		naming:     app.cfg.Output.Naming,
+		rewriteExt: rewriteExt,
+		cache:      cache,
+		peers:      map[int64]tgapi.InputPeerClass{},
+		api:        api,
+		titles:     state,
+		titleMemo:  map[int64]string{},
 	}
 
 	collector := &walkCollector{
@@ -860,6 +864,9 @@ func downloadRun(ctx context.Context, cmd *cobra.Command, state *store.Store, ap
 	}
 
 	if res.Parked {
+		postRunWebhook(ctx, cmd, app, notify.EventParked, runID, account,
+			len(targets), len(items), res, time.Since(started))
+
 		return printLine(cmd, "parked: flood wait until %s — resume with `teleparse resume %s`\n",
 			res.ResumeAt.Format(time.RFC3339), runID)
 	}
@@ -867,6 +874,9 @@ func downloadRun(ctx context.Context, cmd *cobra.Command, state *store.Store, ap
 	if err := finishStatus(ctx, state, runID, res); err != nil {
 		return err
 	}
+
+	postRunWebhook(ctx, cmd, app, notify.EventDone, runID, account,
+		len(targets), len(items), res, time.Since(started))
 
 	// The live UI prints its own final summary on close; quiet mode keeps
 	// the stdout one-liner; silent prints neither.
