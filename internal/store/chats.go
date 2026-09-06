@@ -34,6 +34,29 @@ func (s *Store) UpsertChat(ctx context.Context, chat Chat) error {
 	return nil
 }
 
+// ChatTitle returns the stored title of the chat; ok is false when the chat
+// is unknown or its title is NULL or blank, the signal for callers to fall
+// back to a chat_<id> label.
+func (s *Store) ChatTitle(ctx context.Context, chatID int64) (string, bool, error) {
+	var title *string
+
+	err := s.db.QueryRowContext(ctx, `
+		SELECT title FROM chats WHERE chat_id = ?`, chatID).Scan(&title)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", false, nil
+		}
+
+		return "", false, fmt.Errorf("chat title %d: %w", chatID, err)
+	}
+
+	if title == nil || *title == "" {
+		return "", false, nil
+	}
+
+	return *title, true, nil
+}
+
 // Watermark returns the highest contiguous processed message id for the
 // chat, or zero when the chat is unknown.
 func (s *Store) Watermark(ctx context.Context, chatID int64) (int64, error) {

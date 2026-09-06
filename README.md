@@ -278,7 +278,9 @@ incremental = true     # watermark-cached walks; --full overrides per run
 root      = ""                                # "" = ~/.local/share/teleparse/downloads
 template  = "{chat}/{date:%Y-%m}/{filename}"
 collision = "index"                           # index | overwrite | skip
-sidecar   = true                              # <file>.json message metadata
+naming    = "original"                        # original | msgid (<msgID>_<index><ext>)
+metadata  = "chat"                            # chat | file | off (sidecar bool maps here)
+sidecar   = true                              # deprecated: metadata = "file"/"off"
 
 [filters]           # defaults; profiles overlay these
 dedupe = "hardlink" # hardlink | unique-id | hash | off
@@ -449,7 +451,7 @@ flowchart LR
     SCAN --> STORE[(store: SQLite WAL)]
     STORE --> DL[download: pool, .part resume, hooks]
     DL -->|FloodWait| PACE[pace: jitter, park]
-    DL --> FS[(files + sidecars)]
+    DL --> FS[(files + per-chat manifests)]
     TG -. webproxy:// .-> WP[webproxy: tproxy v1 carrier] -.-> GOTD
 ```
 

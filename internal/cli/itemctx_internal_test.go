@@ -57,7 +57,8 @@ func TestResolveHydratesCachedManifestItem(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, first.Location, "a cache miss carries no location yet")
 	require.NotNil(t, first.Refetch, "the refetch hook is always attached")
-	assert.Equal(t, filepath.Join("root", "7", "100_0.pdf"), first.Path)
+	assert.Equal(t, filepath.Join("root", "chat_7", "100_doc.pdf"), first.Path,
+		"a manifest row with a filename renders the real templated path")
 
 	location, err := first.Refetch(t.Context())
 	require.NoError(t, err)
@@ -88,8 +89,8 @@ func TestResolveHydratesCachedManifestItem(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, second.Location, "the seeded cache answers without a second request")
 	assert.Equal(t, 4, second.DC, "the seeded cache also carries the document DC")
-	assert.Equal(t, filepath.Join("root", "7", "100_0.pdf"), second.Path,
-		"a refetched entry keeps the store-only fallback path")
+	assert.Equal(t, filepath.Join("root", "chat_7", "100_doc.pdf"), second.Path,
+		"a refetched entry keeps the manifest-rendered path")
 
 	assert.Len(t, api.channelReqs, 1, "the second Resolve must not refetch again")
 }
@@ -211,7 +212,7 @@ func TestWithCachedPendingSkipsFreshWalkedTargets(t *testing.T) {
 
 	app := &App{cfg: config.Default(), paths: &config.Paths{Downloads: t.TempDir()}}
 
-	_, collector := newRunResolver(app, &fakeHistoryAPI{})
+	_, collector := newRunResolver(app, &fakeHistoryAPI{}, state)
 	collector.incremental[30] = true
 
 	merged, err := withCachedPending(ctx, state,

@@ -390,7 +390,7 @@ func executeRun(ctx context.Context, cmd *cobra.Command, app *App, account, prof
 		}
 	}
 
-	resolver, collector := newRunResolver(app, api)
+	resolver, collector := newRunResolver(app, api, state)
 
 	rewalkMinAge, err := app.cfg.Scan.RewalkAge()
 	if err != nil {
@@ -638,15 +638,18 @@ func (c *walkCollector) observe(fctx filters.Context, msg *tgapi.Message) {
 	c.items = append(c.items, item)
 }
 
-func newRunResolver(app *App, api refetchAPI) (*runResolver, *walkCollector) {
+func newRunResolver(app *App, api refetchAPI, state *store.Store) (*runResolver, *walkCollector) {
 	cache := newMessageCache(msgCacheLimit)
 
 	resolver := &runResolver{
-		root:     app.paths.Downloads,
-		template: app.cfg.Output.Template,
-		cache:    cache,
-		peers:    map[int64]tgapi.InputPeerClass{},
-		api:      api,
+		root:      app.paths.Downloads,
+		template:  app.cfg.Output.Template,
+		naming:    app.cfg.Output.Naming,
+		cache:     cache,
+		peers:     map[int64]tgapi.InputPeerClass{},
+		api:       api,
+		titles:    state,
+		titleMemo: map[int64]string{},
 	}
 
 	collector := &walkCollector{

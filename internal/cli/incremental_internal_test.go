@@ -109,7 +109,7 @@ func newWalkFixture(t *testing.T, watermark int64) (*store.Store, *walkCollector
 	}
 
 	app := &App{cfg: config.Default(), paths: &config.Paths{Downloads: t.TempDir()}}
-	_, collector := newRunResolver(app, &fakeHistoryAPI{})
+	_, collector := newRunResolver(app, &fakeHistoryAPI{}, state)
 
 	return state, collector
 }
@@ -305,7 +305,7 @@ func TestAdvanceWalkedWatermarksMovesAllSeenChats(t *testing.T) {
 
 	app := &App{cfg: config.Default(), paths: &config.Paths{Downloads: t.TempDir()}}
 
-	_, collector := newRunResolver(app, &fakeHistoryAPI{})
+	_, collector := newRunResolver(app, &fakeHistoryAPI{}, state)
 	collector.maxSeen[30] = 700
 	collector.maxSeen[31] = 900
 
@@ -341,7 +341,7 @@ func TestWithCachedPendingMergesManifestRows(t *testing.T) {
 
 	app := &App{cfg: config.Default(), paths: &config.Paths{Downloads: t.TempDir()}}
 
-	_, collector := newRunResolver(app, &fakeHistoryAPI{})
+	_, collector := newRunResolver(app, &fakeHistoryAPI{}, state)
 	collector.items = []store.MediaItem{
 		{ChatID: 30, MessageID: 9, MediaClass: "photo", MediaID: 9}, // overlaps the manifest
 		{ChatID: 30, MessageID: 40, MediaClass: "photo", MediaID: 40},

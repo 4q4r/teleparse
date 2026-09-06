@@ -159,12 +159,26 @@ func templateTail() string {
 # Path template under root. Placeholders: {chat} {sender} {date:YYYY-MM}
 # {filename} {msgid} {ext}.
 
+# naming = "original"
+# How {filename} renders: original keeps Telegram's own file name;
+# msgid names files <messageID>_<index><ext> (collision-proof) while the
+# directories stay template-driven. Applies to fresh and cached downloads
+# alike.
+
 # collision = "index"
 # What to do when the target path exists: index renames to name-1.ext,
 # overwrite replaces it silently, skip keeps the existing file.
 
+# metadata = "chat"
+# Download metadata output: chat keeps ONE manifest.json per chat
+# directory (files numbered seq 1..N in completion order, paths relative
+# to the manifest); file writes a legacy <file>.json sidecar next to each
+# download; off writes nothing.
+# The legacy sidecar = true/false still maps to metadata = "file"/"off"
+# when metadata is not set.
+
 # sidecar = true
-# Write a <file>.json sidecar with message metadata next to each download.
+# Deprecated: use metadata above. Only consulted when metadata is unset.
 
 # part_suffix = ".part"
 # Suffix for in-progress downloads, renamed away on completion.
