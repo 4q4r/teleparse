@@ -177,7 +177,7 @@ func resumeOne(app *App, cmd *cobra.Command, run store.Run) error {
 		return withAPI(ctx, client, cfg.Net.Takeout, premium.Premium, func(ctx context.Context, api *tgapi.Client) error {
 			return executeRun(ctx, cmd, app, run.Account, textOrDefault(run.Profile),
 				opts, plan, payload.Chats, runMode{}, api, client, cfg.Net.Takeout,
-				takeoutFileCap(cfg.Net.Takeout, premium.Premium), nil)
+				takeoutFileCap(cfg.Net.Takeout, premium.Premium), nil, nil)
 		}, func(finishErr error) {
 			if app.silentMode(cmd) {
 				return

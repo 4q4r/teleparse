@@ -138,7 +138,7 @@ server quirks that apply to your combination.
 | `auth login --import-tdesktop <tdata-dir>` | migrate a Telegram Desktop tdata account (pick interactively if several) |
 | `chats list \| show` | dialogs with types/usernames/protected flags |
 | `scan [CHATS] [FILTERS]` | `dl --dry-run`: writes manifest, downloads nothing |
-| `dl [CHATS] [FILTERS]` | download; `--account a,b\|all`, `--takeout`, `--count-only` |
+| `dl [CHATS] [FILTERS]` | download; `--account a,b\|all`, `--takeout`, `--count-only`, `--no-routing` (bypass `accounts.routing` for one run) |
 | `get [LINKS]... [FILTERS]` | one-shot fetch of specific messages by t.me link, id list or range; `--group` (default) expands albums, `--from-export` ingests a Telegram Desktop export (see below); every dl flag (`--dry-run`, `--count-only`, `--takeout`, filters) applies |
 | `sync [CHATS]` | incremental via per-chat watermarks (cron-friendly) |
 | `resume [RUN_ID]` | resume runs parked by FloodWait or interrupted |
@@ -323,6 +323,10 @@ premium_boost = true   # premium preset (connections 8) on auto-detected premium
 [scan]
 incremental = true     # watermark-cached walks; --full overrides per run
 
+[accounts]             # both off by default; --account pins one account and skips both
+routing = { "@chat" = "spare", "123456" = "spare" } # per-chat account routing (spec → account)
+premium_preferred = false # oversized (2–4GiB) items defer to a local premium session
+
 [output]
 root      = ""                                # "" = ~/.local/share/teleparse/downloads
 template  = "{chat}/{date:%Y-%m}/{filename}"
@@ -414,6 +418,25 @@ session token. Carriers: `websocket` / `websocket-lanes` (primary), `https` / `h
 - Stable per-account device fingerprint (derived once, persisted, never drifts).
 - Sessions 0600, single-process flock, entity cache persisted (deleted channels: the server no
   longer returns history — your local manifest is the recovery).
+
+## Per-chat account routing & premium fallback
+
+`[accounts]` (both features **off by default**) splits one `dl`/`scan`/`sync`
+invocation across accounts — same command, sequential sessions:
+
+- `routing = { "@chat" = "spare", "123456" = "spare" }` — a chat spec (username
+  or id, resolved like dl scope specs) mapped to an account is **excluded from
+  the default account's pass** and processed by a second client session of that
+  account after the default pass finishes (sessions are strictly sequential;
+  the per-account flock forbids concurrency anyway). Unknown routed accounts
+  fail at start with the known-account list, never mid-run. `get` and `resume`
+  ignore routing. Precedence: `--account` > routing; `--no-routing` bypasses it
+  for one run.
+- `premium_preferred = true` — items larger than the current session's file cap
+  but within the premium 4GiB cap (i.e. oversized for a non-premium 2GiB
+  account) are deferred to a final session of a local **Telegram Premium**
+  account (detected via the cached premium state) instead of failing. Without a
+  local premium session the oversized failure (with its cap reason) stays.
 
 ## Incremental runs
 

@@ -404,6 +404,41 @@ func dialogInputPeer(dialog *tg.Dialog, entities peer.Entities) (tg.InputPeerCla
 	}
 }
 
+// PeerRef is the parsed form of a peer spec for callers that match
+// resolved chats against configured specs (per-chat account routing)
+// without an RPC: exactly one of ID or Username is meaningful.
+type PeerRef struct {
+	ID       int64
+	Username string // normalized: lowercase, no leading @
+}
+
+// ParsePeerSpec classifies a dl-family peer spec (@handle, bare handle,
+// t.me link or numeric id, bare or -100-prefixed) into its matching form,
+// sharing the scope parsers so routing keys resolve exactly like dl scope
+// specs. Message links and other non-chat specs return ErrUnknownChat.
+func ParsePeerSpec(spec string) (PeerRef, error) {
+	if id, ok := numericSpec(spec); ok {
+		return PeerRef{ID: id}, nil
+	}
+
+	username, err := usernameOf(spec)
+	if err != nil {
+		return PeerRef{}, err
+	}
+
+	return PeerRef{Username: strings.ToLower(username)}, nil
+}
+
+// Matches reports whether the parsed spec identifies the chat with the
+// given username and id; username comparison ignores case and a leading @.
+func (p PeerRef) Matches(username string, id int64) bool {
+	if p.ID != 0 {
+		return p.ID == id
+	}
+
+	return p.Username != "" && strings.TrimPrefix(strings.ToLower(username), "@") == p.Username
+}
+
 // Scope spec keywords.
 const (
 	scopeAll   = "all"

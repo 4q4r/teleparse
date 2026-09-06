@@ -44,6 +44,7 @@ type dlRunFlags struct {
 	takeout   bool
 	noTakeout bool
 	full      bool
+	noRouting bool
 }
 
 // runMode tunes the shared pipeline: dry-run previews, count-only output,
@@ -75,6 +76,13 @@ type teleparseOptionsEmbed struct {
 func addFullWalkFlag(cmd *cobra.Command, flags *dlRunFlags) {
 	cmd.Flags().BoolVar(&flags.full, "full", false,
 		"force a full re-walk of every chat (ignore cached watermarks and rewalk freshness; overrides scan.incremental)")
+}
+
+// addNoRoutingFlag registers the shared --no-routing bypass of the
+// [accounts] routing table for one invocation.
+func addNoRoutingFlag(cmd *cobra.Command, flags *dlRunFlags) {
+	cmd.Flags().BoolVar(&flags.noRouting, "no-routing", false,
+		"process every chat on the default account, ignoring accounts.routing for this run")
 }
 
 // incrementalMode resolves whether this run walks incrementally: config
@@ -112,6 +120,7 @@ func dlCmd(app *App) *cobra.Command {
 	cmd.Flags().BoolVar(&flags.takeout, "takeout", false, "wrap session in takeout mode (lower flood limits)")
 	cmd.Flags().BoolVar(&flags.noTakeout, "no-takeout", false, "never use takeout mode, even if auto would engage")
 	addFullWalkFlag(cmd, &flags)
+	addNoRoutingFlag(cmd, &flags)
 	addNotifyWebhookFlag(cmd)
 	addRewriteExtFlag(cmd)
 	cmd.Flags().String("profile", "", "named filter profile overlay")
@@ -153,6 +162,7 @@ func scanCmd(app *App) *cobra.Command {
 		"print which filters push down to the server vs run client-side, then proceed")
 	cmd.Flags().BoolVar(&flags.countOnly, "count-only", false, "only print per-chat match counts")
 	addFullWalkFlag(cmd, &flags)
+	addNoRoutingFlag(cmd, &flags)
 	addSilentOutputMirror(cmd)
 	addFilterFlags(cmd, &filterSet)
 
@@ -202,27 +212,42 @@ func runDownloadCommand(app *App, cmd *cobra.Command, specs []string, filterSet 
 		return fail(cmd, errTakeoutExclusive)
 	}
 
+	// Routing tables and premium preference resolve (and validate) before
+	// the first session opens, so a bad table fails the invocation at
+	// start instead of mid-run. A pinned accountOverride (like --account)
+	// skips routing entirely.
+	var extras *invocationExtras
+
+	if accountOverride == "" {
+		extras, err = planInvocation(cmd.Context(), app, cmd, flags, job)
+		if err != nil {
+			return fail(cmd, err)
+		}
+	}
+
 	for _, account := range accounts {
 		cfg := *app.cfg
 		cfg.Auth.Account = account
 
-		runErr := tg.Run(cmd.Context(), account, creds, &cfg, app.paths, func(
+		runErr := accountSessionRunner(cmd.Context(), account, creds, &cfg, app.paths, func(
 			ctx context.Context,
 			client *telegram.Client,
 		) error {
-			return runAccountSession(ctx, cmd, app, account, profileName, opts, plan, specs, mode, client, &cfg, flags, job)
+			return runAccountSession(ctx, cmd, app, account, profileName, opts, plan, specs, mode,
+				client, &cfg, flags, extras, job)
 		})
 		if runErr != nil {
 			return fail(cmd, runErr)
 		}
 	}
 
-	return nil
+	return runDeferredSessions(cmd, app, creds, extras, profileName, opts, plan, mode, flags)
 }
 
 // runAccountSession wraps one connected client session: takeout decision,
 // engagement notice and the fail-soft fallback to the plain API when an
-// AUTO-engaged takeout session cannot start.
+// AUTO-engaged takeout session cannot start. extras carries the routing /
+// premium-deferral plan (nil on resume, get and deferred passes).
 func runAccountSession(
 	ctx context.Context,
 	cmd *cobra.Command,
@@ -235,6 +260,7 @@ func runAccountSession(
 	client *telegram.Client,
 	cfg *config.Config,
 	flags dlRunFlags,
+	extras *invocationExtras,
 	job *getJob,
 ) error {
 	{
@@ -265,7 +291,7 @@ func runAccountSession(
 				api *tgapi.Client,
 			) error {
 				return executeRun(ctx, cmd, app, account, profileName, opts, plan, specs, mode, api, client,
-					takeoutEnabled, takeoutFileCap(takeoutEnabled, premium.Premium), job)
+					takeoutEnabled, takeoutFileCap(takeoutEnabled, premium.Premium), extras, job)
 			}, func(finishErr error) {
 				if app.silentMode(cmd) {
 					return
@@ -353,10 +379,12 @@ func withAPI(
 // executeRun walks the resolved scope, records the run, then previews or
 // downloads everything the filters matched; decomposed into helpers below.
 // takeoutCap is the active export session's file cap (zero off takeout);
+// extras carries the routing / premium-deferral plan (nil disables both);
 // job non-nil replaces the walk phase with get-mode explicit fetching.
 func executeRun(ctx context.Context, cmd *cobra.Command, app *App, account, profileName string,
 	opts filters.Options, plan *filters.Plan, specs []string, mode runMode,
-	api *tgapi.Client, client *telegram.Client, takeoutActive bool, takeoutCap int64, job *getJob,
+	api *tgapi.Client, client *telegram.Client, takeoutActive bool, takeoutCap int64,
+	extras *invocationExtras, job *getJob,
 ) error {
 	if job != nil {
 		specs = getJobSpecs(job)
@@ -386,6 +414,13 @@ func executeRun(ctx context.Context, cmd *cobra.Command, app *App, account, prof
 	}
 
 	targets, err := scan.ResolveClient(ctx, client, specs, opts)
+	if err != nil {
+		return finishRunE(ctx, state, runID, err)
+	}
+
+	// Per-chat account routing (walk runs only): matched chats leave this
+	// pass for a routed session opened after this one finishes.
+	targets, err = splitRoutedTargets(cmd, app, extras, job, targets)
 	if err != nil {
 		return finishRunE(ctx, state, runID, err)
 	}
@@ -446,7 +481,7 @@ func executeRun(ctx context.Context, cmd *cobra.Command, app *App, account, prof
 	}
 
 	return downloadRun(ctx, cmd, state, app, runID, account, resolver,
-		collector, targets, opts, api, client, takeoutActive, takeoutCap, mode)
+		collector, targets, opts, api, client, takeoutActive, takeoutCap, extras, mode)
 }
 
 // executeTarget runs one target's fetch phase — a history walk for dl-family
@@ -774,7 +809,7 @@ func previewRun(ctx context.Context, cmd *cobra.Command, app *App, state *store.
 func downloadRun(ctx context.Context, cmd *cobra.Command, state *store.Store, app *App, runID string,
 	account string, resolver *runResolver, collector *walkCollector, targets []scan.Target,
 	opts filters.Options, api *tgapi.Client, client *telegram.Client, takeoutActive bool, takeoutCap int64,
-	mode runMode,
+	extras *invocationExtras, mode runMode,
 ) error {
 	pacer := pace.New(pace.Config{
 		Concurrency:         app.cfg.Pacing.Concurrency,
@@ -848,6 +883,15 @@ func downloadRun(ctx context.Context, cmd *cobra.Command, state *store.Store, ap
 		}
 
 		items = merged
+	}
+
+	// Premium-preferred fallback: items this session cannot transfer but a
+	// premium 4GiB session can leave the queue for the premium pass instead
+	// of failing; without a local premium account they stay and fail with
+	// the cap reason.
+	items, deferErr := deferOversizedToPremium(cmd, app, extras, premium.Premium, takeoutCap, items)
+	if deferErr != nil {
+		return finishRunE(ctx, state, runID, deferErr)
 	}
 
 	if err := mgr.Enqueue(ctx, items); err != nil {

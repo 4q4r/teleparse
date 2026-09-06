@@ -79,7 +79,7 @@ func defaultTemplate() string {
 ` + templateTail()
 }
 
-// templateTail holds the pacing/output/download/hooks sections.
+// templateTail holds the pacing/download/scan and accounts/output sections.
 func templateTail() string {
 	return `# [pacing] tunes anti-ban behavior for downloads.
 
@@ -93,8 +93,8 @@ func templateTail() string {
 # [delay_min, delay_max] is drawn each time. Fractions are allowed.
 
 # flood_sleep_threshold = 60
-# Auto-sleep on FLOOD_WAIT up to this many seconds; longer waits park
-# the run for "teleparse resume" instead of sleeping. Flood waits bind
+# Auto-sleep on FLOOD_WAIT up to this many seconds; longer waits park the
+# run for "teleparse resume" instead of sleeping. Flood waits bind
 # to the account: proxy rotation does not clear them.
 
 # requests_per_minute = 0
@@ -144,7 +144,36 @@ func templateTail() string {
 # downloads are still served) instead of re-probing every chat. Relative
 # duration (30s, 10m, 1h); "0" walks every chat on every run. --full
 # ignores freshness along with watermarks.
+` + templateAccountsTail() + templateOutputTail()
+}
 
+// templateAccountsTail holds the multi-account routing section.
+func templateAccountsTail() string {
+	return `# [accounts] tunes multi-account runs. Both features are off by default;
+# --account always pins one account and skips both.
+
+[accounts]
+# routing = { "@chat" = "account2", "123456" = "spare" }
+# Per-chat account routing: chat spec (username or id, resolved like dl
+# scope specs) -> account name. A routed chat is EXCLUDED from the
+# default account's dl/scan/sync pass and processed by a sequential
+# session of the routed account inside the SAME invocation (never in
+# parallel; the per-account lock forbids that anyway). get and resume
+# ignore routing; --no-routing bypasses it for one run. Precedence:
+# --account > routing.
+
+# premium_preferred = false
+# When true, items larger than the current session's file cap but within
+# the premium 4GiB cap (i.e. oversized for a non-premium 2GiB account)
+# defer to a sequential session of any local premium account - detected
+# through the cached premium state - instead of failing. Without a local
+# premium session such items still fail with the cap reason.
+`
+}
+
+// templateOutputTail holds the output section.
+func templateOutputTail() string {
+	return `
 # [output] controls where and how downloaded files land.
 
 [output]
@@ -173,7 +202,7 @@ func templateTail() string {
 # Download metadata output: chat keeps ONE manifest.json per chat
 # directory (files numbered seq 1..N in completion order, paths relative
 # to the manifest); file writes a legacy <file>.json sidecar next to each
-# download; off writes nothing.
+# download; off writes nothing at all.
 # The legacy sidecar = true/false still maps to metadata = "file"/"off"
 # when metadata is not set.
 

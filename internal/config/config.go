@@ -31,6 +31,7 @@ var (
 	ErrBadRewalkAge       = errors.New(`must be a relative duration like 30s, 10m, 1h ("0" disables)`)
 	ErrBadNaming          = errors.New("not one of original|msgid")
 	ErrBadMetadata        = errors.New("not one of chat|file|off")
+	ErrBadRoutingTarget   = errors.New("must map the chat spec to a non-empty account name")
 )
 
 // Naming styles accepted by [output] naming; NamingOriginal keeps the
@@ -154,6 +155,20 @@ type Run struct {
 	NotifyWebhook string `toml:"notify_webhook"`
 }
 
+// Accounts tunes multi-account runs: per-chat account routing and the
+// premium-preferred oversized fallback. Both default off.
+type Accounts struct {
+	// Routing maps a chat spec (username or id, resolved like dl scope
+	// specs) to the account name whose session processes that chat: the
+	// routed chat is excluded from the default account's pass and handled
+	// by a sequential second session inside the same invocation.
+	Routing map[string]string `toml:"routing"`
+	// PremiumPreferred defers items whose size exceeds the current
+	// session's cap but fits the premium 4GiB cap to a sequential session
+	// of a local premium account instead of failing them oversized.
+	PremiumPreferred bool `toml:"premium_preferred"`
+}
+
 // Hooks run after each successful download. Templates may use {path}.
 type Hooks struct {
 	PostDownload []string `toml:"post_download"`
@@ -231,6 +246,7 @@ type Config struct {
 	Output   Output             `toml:"output"`
 	Download Download           `toml:"download"`
 	Scan     Scan               `toml:"scan"`
+	Accounts Accounts           `toml:"accounts"`
 	Filters  Filters            `toml:"filters"`
 	Hooks    Hooks              `toml:"hooks"`
 	Run      Run                `toml:"run"`
@@ -367,6 +383,10 @@ func (c *Config) Validate() error {
 			c.Net.Proxy, ErrBadProxyURL)
 	}
 
+	if err := c.validateAccounts(); err != nil {
+		return err
+	}
+
 	for name, prof := range c.Profiles {
 		if err := prof.Validate(); err != nil {
 			return fmt.Errorf("profile %q: %w", name, err)
@@ -417,6 +437,19 @@ func (c *Config) validateDownload() error {
 
 	if c.Download.Connections < connectionsMin || c.Download.Connections > connectionsMax {
 		return fmt.Errorf("download.connections %d: %w", c.Download.Connections, ErrBadConnections)
+	}
+
+	return nil
+}
+
+// validateAccounts rejects routing entries that could never resolve to a
+// session; deeper checks (local session presence, spec parseability) run
+// at dl-family start where the accounts dir is known.
+func (c *Config) validateAccounts() error {
+	for spec, account := range c.Accounts.Routing {
+		if strings.TrimSpace(account) == "" {
+			return fmt.Errorf("accounts.routing[%q]: %w", spec, ErrBadRoutingTarget)
+		}
 	}
 
 	return nil
