@@ -5,7 +5,7 @@ import (
 )
 
 // SidecarMeta is the message metadata written next to a completed download
-// as <final>.json when Output.Sidecar is enabled.
+// as <final>.json when Output.Metadata is "file".
 type SidecarMeta struct {
 	ChatID     int64             `json:"chat_id"`
 	ChatTitle  string            `json:"chat_title,omitempty"`

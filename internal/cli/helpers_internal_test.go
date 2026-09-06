@@ -270,9 +270,13 @@ func TestRunResolverResolveCacheHitAndMiss(t *testing.T) {
 		Filename: ptr("pic.png"), Date: ptr("2026-01-02T03:04:05Z"),
 	})
 	require.NoError(t, err)
-	assert.Equal(t, filepath.Join("root", "9", "55_2.png"), miss.Path)
+
+	// The manifest row renders through the real template: no stored title
+	// means the chat_<id> label, the filename comes from the media row.
+	assert.Equal(t, filepath.Join("root", "chat_9", "55_pic.png"), miss.Path)
 	require.NotNil(t, miss.Meta)
 	assert.Equal(t, int64(9), miss.Meta.ChatID)
+	assert.Equal(t, "chat_9", miss.Meta.ChatTitle)
 	assert.Equal(t, 2, miss.Meta.MediaIndex)
 	assert.Equal(t, "pic.png", miss.Meta.Filename)
 	assert.Equal(t, int64(1767323045), miss.Meta.Date)

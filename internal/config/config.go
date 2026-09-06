@@ -29,6 +29,24 @@ var (
 	ErrBadThreads         = errors.New("must be within 1..16")
 	ErrBadConnections     = errors.New("must be within 1..8")
 	ErrBadRewalkAge       = errors.New(`must be a relative duration like 30s, 10m, 1h ("0" disables)`)
+	ErrBadNaming          = errors.New("not one of original|msgid")
+	ErrBadMetadata        = errors.New("not one of chat|file|off")
+)
+
+// Naming styles accepted by [output] naming; NamingOriginal keeps the
+// Telegram file name, NamingMsgID names files <msgID>_<index><ext>.
+const (
+	NamingOriginal = "original"
+	NamingMsgID    = "msgid"
+)
+
+// Metadata modes accepted by [output] metadata; MetadataChat writes one
+// manifest.json per chat directory, MetadataFile the legacy per-file sidecar
+// and MetadataOff nothing at all.
+const (
+	MetadataChat = "chat"
+	MetadataFile = "file"
+	MetadataOff  = "off"
 )
 
 // Defaults for pacing (see research: conservative anti-ban numbers) and
@@ -116,7 +134,9 @@ type Output struct {
 	Root       string `toml:"root"`        // "" = XDG data dir
 	Template   string `toml:"template"`    // path template: {chat} {date} {sender} {filename}
 	Collision  string `toml:"collision"`   // index | overwrite | skip
-	Sidecar    bool   `toml:"sidecar"`     // write <file>.json message metadata
+	Naming     string `toml:"naming"`      // original | msgid — how {filename} renders
+	Metadata   string `toml:"metadata"`    // chat | file | off — download metadata output
+	Sidecar    bool   `toml:"sidecar"`     // deprecated bool; maps to metadata when metadata is unset
 	PartSuffix string `toml:"part_suffix"` // in-progress suffix
 	Sha256     bool   `toml:"sha256"`      // hash after download
 }
@@ -266,6 +286,8 @@ func Default() *Config {
 			Root:       "",
 			Template:   "{chat}/{date:%Y-%m}/{filename}",
 			Collision:  "index",
+			Naming:     NamingOriginal,
+			Metadata:   MetadataChat,
 			Sidecar:    true,
 			PartSuffix: ".part",
 			Sha256:     false,
@@ -296,6 +318,18 @@ func (c *Config) Validate() error {
 	case "", "index", "overwrite", "skip":
 	default:
 		return fmt.Errorf("output.collision %q: %w", c.Output.Collision, ErrBadCollision)
+	}
+
+	switch c.Output.Naming {
+	case "", NamingOriginal, NamingMsgID:
+	default:
+		return fmt.Errorf("output.naming %q: %w", c.Output.Naming, ErrBadNaming)
+	}
+
+	switch c.Output.Metadata {
+	case "", MetadataChat, MetadataFile, MetadataOff:
+	default:
+		return fmt.Errorf("output.metadata %q: %w", c.Output.Metadata, ErrBadMetadata)
 	}
 
 	if err := c.validatePacing(); err != nil {

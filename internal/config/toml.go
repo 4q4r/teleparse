@@ -40,7 +40,62 @@ func decodeTOML(text string, cfg *Config) error {
 		cfg.Profiles = map[string]Filters{}
 	}
 
+	if err := applySidecarCompat(text, cfg); err != nil {
+		return err
+	}
+
+	normalizeOutputEnums(cfg)
+
 	return nil
+}
+
+// applySidecarCompat migrates the deprecated output.sidecar bool onto
+// output.metadata: a config setting sidecar without metadata maps true to
+// "file" and false to "off"; an explicit metadata key always wins and
+// configs naming neither key keep the built-in default.
+func applySidecarCompat(text string, cfg *Config) error {
+	var raw map[string]any
+
+	if err := toml.Unmarshal([]byte(text), &raw); err != nil {
+		return fmt.Errorf("%w: scan output keys: %w", ErrDecodeTOML, err)
+	}
+
+	output, ok := raw["output"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	if _, hasMetadata := output["metadata"]; hasMetadata {
+		return nil
+	}
+
+	sidecar, hasSidecar := output["sidecar"].(bool)
+	if !hasSidecar {
+		return nil
+	}
+
+	if sidecar {
+		cfg.Output.Metadata = MetadataFile
+
+		return nil
+	}
+
+	cfg.Output.Metadata = MetadataOff
+
+	return nil
+}
+
+// normalizeOutputEnums folds empty naming/metadata values onto their
+// built-in defaults so downstream consumers compare against exactly one
+// non-empty mode, never a fallback chain.
+func normalizeOutputEnums(cfg *Config) {
+	if cfg.Output.Naming == "" {
+		cfg.Output.Naming = NamingOriginal
+	}
+
+	if cfg.Output.Metadata == "" {
+		cfg.Output.Metadata = MetadataChat
+	}
 }
 
 // save writes cfg as TOML to path with 0600, creating parent dirs.
