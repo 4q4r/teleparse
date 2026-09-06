@@ -46,13 +46,15 @@ type dlRunFlags struct {
 }
 
 // runMode tunes the shared pipeline: dry-run previews, count-only output,
-// sync-mode watermarks and incremental (watermark-cached) walks.
+// sync-mode watermarks, incremental (watermark-cached) walks and get-mode
+// explicit-id fetching (which never advances walk watermarks).
 type runMode struct {
 	dryRun      bool
 	countOnly   bool
 	syncMode    bool
 	incremental bool
 	fullWalk    bool
+	getMode     bool
 }
 
 // runPayload is the TOML envelope persisted in runs.filter_json: the chat
@@ -99,7 +101,7 @@ func dlCmd(app *App) *cobra.Command {
 				countOnly:   flags.countOnly,
 				incremental: incrementalMode(app.cfg, flags),
 				fullWalk:    flags.full,
-			}, "")
+			}, "", nil)
 		},
 	}
 	cmd.Flags().BoolVar(&flags.dryRun, "dry-run", false, "list matches, download nothing (same as scan)")
@@ -141,7 +143,7 @@ func scanCmd(app *App) *cobra.Command {
 				dryRun:      true,
 				incremental: incrementalMode(app.cfg, flags),
 				fullWalk:    flags.full,
-			}, "")
+			}, "", nil)
 		},
 	}
 	cmd.Flags().BoolVar(&flags.explain, "explain", false,
@@ -155,9 +157,10 @@ func scanCmd(app *App) *cobra.Command {
 }
 
 // runDownloadCommand resolves effective options and accounts, then executes
-// the pipeline once per account; accountOverride pins the account (resume).
+// the pipeline once per account; accountOverride pins the account (resume);
+// job non-nil switches the fetch phase to get-mode (nil for dl/scan).
 func runDownloadCommand(app *App, cmd *cobra.Command, specs []string, filterSet *filterFlags,
-	flags dlRunFlags, mode runMode, accountOverride string,
+	flags dlRunFlags, mode runMode, accountOverride string, job *getJob,
 ) error {
 	opts, profileName, err := effectiveOptions(app.cfg, cmd, filterSet)
 	if err != nil {
@@ -204,7 +207,7 @@ func runDownloadCommand(app *App, cmd *cobra.Command, specs []string, filterSet 
 			ctx context.Context,
 			client *telegram.Client,
 		) error {
-			return runAccountSession(ctx, cmd, app, account, profileName, opts, plan, specs, mode, client, &cfg, flags)
+			return runAccountSession(ctx, cmd, app, account, profileName, opts, plan, specs, mode, client, &cfg, flags, job)
 		})
 		if runErr != nil {
 			return fail(cmd, runErr)
@@ -229,6 +232,7 @@ func runAccountSession(
 	client *telegram.Client,
 	cfg *config.Config,
 	flags dlRunFlags,
+	job *getJob,
 ) error {
 	{
 		takeoutMode, reason := resolveTakeoutModeFor(flags, cfg, specs,
@@ -258,7 +262,7 @@ func runAccountSession(
 				api *tgapi.Client,
 			) error {
 				return executeRun(ctx, cmd, app, account, profileName, opts, plan, specs, mode, api, client,
-					takeoutEnabled, takeoutFileCap(takeoutEnabled, premium.Premium))
+					takeoutEnabled, takeoutFileCap(takeoutEnabled, premium.Premium), job)
 			}, func(finishErr error) {
 				if app.silentMode(cmd) {
 					return
@@ -345,11 +349,16 @@ func withAPI(
 
 // executeRun walks the resolved scope, records the run, then previews or
 // downloads everything the filters matched; decomposed into helpers below.
-// takeoutCap is the active export session's file cap (zero off takeout).
+// takeoutCap is the active export session's file cap (zero off takeout);
+// job non-nil replaces the walk phase with get-mode explicit fetching.
 func executeRun(ctx context.Context, cmd *cobra.Command, app *App, account, profileName string,
 	opts filters.Options, plan *filters.Plan, specs []string, mode runMode,
-	api *tgapi.Client, client *telegram.Client, takeoutActive bool, takeoutCap int64,
+	api *tgapi.Client, client *telegram.Client, takeoutActive bool, takeoutCap int64, job *getJob,
 ) error {
+	if job != nil {
+		specs = getJobSpecs(job)
+	}
+
 	state, err := openStore(app) //nolint:contextcheck // store.Open takes no context
 	if err != nil {
 		return err
@@ -404,30 +413,21 @@ func executeRun(ctx context.Context, cmd *cobra.Command, app *App, account, prof
 
 	walkStarted := time.Now()
 
+	// Get-mode link contexts, bucketed per resolved chat before the loop so
+	// each iteration fetches exactly its own target's ids.
+	var linkContexts map[int64][]linkTarget
+
+	if job != nil && job.export == nil {
+		linkContexts = linkContextsByChat(specs, targets, job.links)
+	}
+
 	for _, target := range targets {
-		if err := state.UpsertChat(ctx, chatFromTarget(target)); err != nil {
+		if err := executeTarget(ctx, cmd, app, state, api, resolver, collector, job,
+			plan, opts, mode, progress, rewalkMinAge, linkContexts, target); err != nil {
 			progress.close()
 
 			return finishRunE(ctx, state, runID, err)
 		}
-
-		resolver.peers[target.Chat.ID] = target.InputPeer
-
-		before, began := len(collector.items), time.Now()
-
-		progress.chatStart(chatLabel(target.Chat.ID, target.Chat.Title))
-
-		if err := walkTarget(ctx, state, api, target, plan, opts, mode, collector, progress, rewalkMinAge); err != nil {
-			progress.close()
-
-			return finishRunE(ctx, state, runID, err)
-		}
-
-		// The settled line shows new+cached: incremental walks carry the
-		// prior-run manifest count resolveWalkWindow stashed, so a chat
-		// whose matches all came from earlier runs never renders (0).
-		progress.chatDone(chatLabel(target.Chat.ID, target.Chat.Title),
-			len(collector.items)-before, int(collector.cached[target.Chat.ID]), time.Since(began))
 	}
 
 	progress.close()
@@ -443,7 +443,63 @@ func executeRun(ctx context.Context, cmd *cobra.Command, app *App, account, prof
 	}
 
 	return downloadRun(ctx, cmd, state, app, runID, account, resolver,
-		collector, targets, opts, api, client, takeoutActive, takeoutCap)
+		collector, targets, opts, api, client, takeoutActive, takeoutCap, mode)
+}
+
+// executeTarget runs one target's fetch phase — a history walk for dl-family
+// runs, explicit-id fetching or export adoption for get jobs — and settles
+// the progress line with the matches it produced.
+func executeTarget(
+	ctx context.Context,
+	cmd *cobra.Command,
+	app *App,
+	state *store.Store,
+	api *tgapi.Client,
+	resolver *runResolver,
+	collector *walkCollector,
+	job *getJob,
+	plan *filters.Plan,
+	opts filters.Options,
+	mode runMode,
+	progress *scanProgress,
+	rewalkMinAge time.Duration,
+	linkContexts map[int64][]linkTarget,
+	target scan.Target,
+) error {
+	if err := state.UpsertChat(ctx, chatFromTarget(target)); err != nil {
+		return fmt.Errorf("upsert chat %d: %w", target.Chat.ID, err)
+	}
+
+	resolver.peers[target.Chat.ID] = target.InputPeer
+
+	before, began := len(collector.items), time.Now()
+
+	progress.chatStart(chatLabel(target.Chat.ID, target.Chat.Title))
+
+	switch {
+	case job != nil && job.export != nil:
+		if err := adoptExportRows(ctx, cmd, app, state, resolver, collector, job.export, plan, mode, target); err != nil {
+			return err
+		}
+	case job != nil:
+		fetch := []peerFetch{{target: target, contexts: linkContexts[target.Chat.ID]}}
+
+		if err := fetchTargetMessages(ctx, api, fetch, plan, collector, job.group); err != nil {
+			return err
+		}
+	default:
+		if err := walkTarget(ctx, state, api, target, plan, opts, mode, collector, progress, rewalkMinAge); err != nil {
+			return err
+		}
+	}
+
+	// The settled line shows new+cached: incremental walks carry the
+	// prior-run manifest count resolveWalkWindow stashed, so a chat
+	// whose matches all came from earlier runs never renders (0).
+	progress.chatDone(chatLabel(target.Chat.ID, target.Chat.Title),
+		len(collector.items)-before, int(collector.cached[target.Chat.ID]), time.Since(began))
+
+	return nil
 }
 
 // walkCollector accumulates manifest items, walk context and per-chat
@@ -694,9 +750,14 @@ func previewRun(ctx context.Context, cmd *cobra.Command, app *App, state *store.
 	}
 
 	// Preview walks carry no download result; every walked chat advanced
-	// cleanly, so the cache builds from the very first run.
-	if err := advanceWalkedWatermarks(ctx, state, collector, targets); err != nil {
-		return err
+	// cleanly, so the cache builds from the very first run. Get-mode runs
+	// fetch explicit ids, not a contiguous walk window, so they leave the
+	// watermarks alone: an incremental walk must still cover everything
+	// between zero and the newest message.
+	if !mode.getMode {
+		if err := advanceWalkedWatermarks(ctx, state, collector, targets); err != nil {
+			return err
+		}
 	}
 
 	if err := state.FinishRun(ctx, runID, store.StatusDone, ""); err != nil {
@@ -709,6 +770,7 @@ func previewRun(ctx context.Context, cmd *cobra.Command, app *App, state *store.
 func downloadRun(ctx context.Context, cmd *cobra.Command, state *store.Store, app *App, runID string,
 	account string, resolver *runResolver, collector *walkCollector, targets []scan.Target,
 	opts filters.Options, api *tgapi.Client, client *telegram.Client, takeoutActive bool, takeoutCap int64,
+	mode runMode,
 ) error {
 	pacer := pace.New(pace.Config{
 		Concurrency:         app.cfg.Pacing.Concurrency,
@@ -817,7 +879,13 @@ func downloadRun(ctx context.Context, cmd *cobra.Command, state *store.Store, ap
 	}
 
 	// Every completed download run refreshes the cache: full walks walked
-	// everything, incremental walks everything past the watermark.
+	// everything, incremental walks everything past the watermark. Get-mode
+	// runs never advance watermarks — they fetched explicit ids, not a
+	// contiguous window.
+	if mode.getMode {
+		return nil
+	}
+
 	return advanceWatermarks(ctx, cmd, state, res, collector, targets, silent)
 }
 
