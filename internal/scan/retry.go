@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/4q4r/teleparse/internal/transport"
+
 	"github.com/gotd/td/telegram/query/messages"
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
@@ -26,8 +28,8 @@ const (
 const rpcServerCodeFloor = 500
 
 // retryableWalkRPC reports whether a history-page error is transient
-// server noise worth retrying: 5xx rpc codes and transport timeouts.
-// Context cancellation and 4xx client errors never retry.
+// server noise worth retrying: 5xx rpc codes, transport timeouts and
+// dead carriers. Context cancellation and 4xx client errors never retry.
 func retryableWalkRPC(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
@@ -38,8 +40,12 @@ func retryableWalkRPC(err error) bool {
 		return rpcErr.Code >= rpcServerCodeFloor
 	}
 
-	// Transport-level failures (timeouts, resets) retry.
-	return isTemporaryTransport(err)
+	// Transport-level failures retry: timeouts and resets via the legacy
+	// Temporary() interface, dead carriers (EPIPE/reset writes to a
+	// socket the local proxy already closed — Temporary() answers false
+	// for those errnos) via the shared dead-transport predicate, which
+	// also carries the portable message fallback for type-less chains.
+	return isTemporaryTransport(err) || transport.IsDeadTransport(err)
 }
 
 // walkRetrySleep pauses between retries with exponential backoff; held in

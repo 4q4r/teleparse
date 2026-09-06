@@ -3,6 +3,10 @@ package scan
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
+	"os"
+	"syscall"
 	"testing"
 
 	"github.com/gotd/td/telegram/query/messages"
@@ -34,6 +38,34 @@ func TestRetryableWalkRPC(t *testing.T) {
 	assert.False(t, retryableWalkRPC(nil))
 	assert.False(t, retryableWalkRPC(context.Canceled))
 	assert.False(t, retryableWalkRPC(errors.Join(context.Canceled)))
+}
+
+// proxyKilledConn reproduces the production walk failure behind a local
+// HTTP CONNECT proxy: gotd's send/write/write-intermediate wraps over a
+// *net.OpError carrying the errno of a write to a socket the proxy
+// already closed. The legacy Temporary() interface answers false for
+// EPIPE and ECONNRESET, so these must classify through the shared
+// dead-transport predicate instead.
+func proxyKilledConn(errno syscall.Errno) error {
+	return fmt.Errorf("send: %w", fmt.Errorf("write: %w", &net.OpError{
+		Op:  "write",
+		Net: "tcp",
+		Err: os.NewSyscallError("write", errno),
+	}))
+}
+
+// TestRetryableWalkRPCDeadTransport pins that carrier deaths retry the
+// history page: the same idempotent paginated request re-issues over the
+// redialed proxied connection.
+func TestRetryableWalkRPCDeadTransport(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, retryableWalkRPC(proxyKilledConn(syscall.EPIPE)),
+		"a broken-pipe write to the dead proxy socket must retry")
+	assert.True(t, retryableWalkRPC(proxyKilledConn(syscall.ECONNRESET)),
+		"a reset carrier must retry")
+	assert.True(t, retryableWalkRPC(errors.New("write: broken pipe")),
+		"the type-less chain must retry through the message fallback")
 }
 
 func TestRetryingQueryRecoversTransientErrors(t *testing.T) {
