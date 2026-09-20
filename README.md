@@ -1,587 +1,317 @@
-# teleparse
+# 📥 teleparse
 
-<!-- TODO: replace 4q4r/teleparse below with the canonical GitHub repo path once published -->
-[![Release](https://img.shields.io/github/v/release/4q4r/teleparse?display_name=tag&sort=semver)](https://github.com/4q4r/teleparse/releases)
-[![Go Version](https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Lint](https://img.shields.io/badge/golangci--lint-strict%20%200%20findings-success)](https://golangci-lint.run)
-[![Tests](https://img.shields.io/badge/tests-728%20passing%20%2Drace-brightgreen)](#development)
-[![MTProto](https://img.shields.io/badge/MTProto-gotd%2Ftd%20v0.161.0%20(layer%20228)-8A2BE2)](https://github.com/gotd/td)
+<div align="center">
 
-**Telegram userbot media parser CLI.** Downloads any media — photos, videos, voice messages,
-video notes (кружки), documents, stickers, GIFs, audio — from any chats your **personal accounts**
-can access, filtered by ~150 combinable dimensions, paced against bans, and proxied through
-SOCKS4/5, HTTP CONNECT, MTProto-proxy (`dd`/`ee` fake-TLS) or the new **WEB-proxy (tproxy v1)**.
+**Telegram userbot media archival engine**
 
-## Contents
+Archival downloads of any media — photos, videos, video notes, voice, audio,
+documents, stickers, GIFs — from every chat your personal accounts can reach,
+filtered by ~150 combinable dimensions, paced against bans, and proxied
+through SOCKS4/5, HTTP CONNECT, MTProto-proxy or WEB-proxy (tproxy v1).
 
-- [Installation](#installation)
-- [Quickstart](#quickstart)
-- [The one-liner this was built for](#the-one-liner-this-was-built-for)
-- [Commands](#commands)
-- [Getting specific messages (`get`)](#getting-specific-messages-get)
-- [Authentication](#authentication)
-- [Filter reference](#filter-reference)
-- [Configuration](#configuration)
-- [Speed](#speed)
-- [Proxies](#proxies)
-- [WEB-proxy v1](#web-proxy-v1)
-- [Anti-ban](#anti-ban)
-- [Incremental runs](#incremental-runs)
-- [State, resume, dedup](#state-resume-dedup)
-- [Architecture](#architecture)
-- [Development](#development)
-- [Limitations](#limitations)
-- [Contributing](#contributing)
-- [License](#license)
+[![Go](https://img.shields.io/badge/Go-1.27%2B-00ADD8?style=for-the-badge&logo=go&logoColor=white)](https://go.dev/)
+[![MTProto](https://img.shields.io/badge/gotd%2Ftd-v0.161.0%20%C2%B7%20Layer%20228-8A2BE2?style=for-the-badge)](https://github.com/gotd/td)
+[![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/4q4r/teleparse?style=for-the-badge)](https://github.com/4q4r/teleparse/releases)
 
-## Installation
+[![CI](https://img.shields.io/github/actions/workflow/status/4q4r/teleparse/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white)](https://github.com/4q4r/teleparse/actions/workflows/ci.yml)
+[![Last commit](https://img.shields.io/github/last-commit/4q4r/teleparse?style=flat-square&logo=github&logoColor=white)](https://github.com/4q4r/teleparse/commits/main)
+[![Repo size](https://img.shields.io/github/repo-size/4q4r/teleparse?style=flat-square&logo=github&logoColor=white)](https://github.com/4q4r/teleparse)
+[![Tests](https://img.shields.io/badge/tests-1357%20passing%20%2Drace-brightgreen?style=flat-square)](#-testing)
+[![Lint](https://img.shields.io/badge/golangci--lint-strict%2C%200%20findings-success?style=flat-square)](https://golangci-lint.run)
 
-## Installation
+[Architecture](#-system-architecture) · [Quick Start](#-quick-start) · [Commands](#-command-surface) · [Configuration](#-configuration) · [Security](#-security) · [Testing](#-testing)
 
-**Release binaries** (recommended): grab a bare static binary for your platform
-from the [Releases](https://github.com/4q4r/teleparse/releases) page —
-`teleparse_Linux_x86_64`, `teleparse_Darwin_arm64.exe`-style names — and
-verify it against the published `checksums.txt` (SHA-256). Archives with
-bundled docs (LICENSE/README/CHANGELOG) are attached alongside.
+</div>
 
-One-liner install on linux/amd64:
+---
 
-```bash
-curl -fsSL https://github.com/4q4r/teleparse/releases/latest/download/teleparse_Linux_x86_64 \
-  -o teleparse && chmod +x teleparse && ./teleparse -v
+## 📑 Table of Contents
+
+- [System Architecture](#-system-architecture)
+- [Project Structure](#-project-structure)
+- [Core Modules](#-core-modules)
+- [Filters](#-filters)
+- [Downloads & Dedup](#-downloads--dedup)
+- [Proxies & WEB-proxy v1](#-proxies--web-proxy-v1)
+- [Anti-ban & Accounts](#-anti-ban--accounts)
+- [Command Surface](#-command-surface)
+- [Configuration](#-configuration)
+- [Security](#-security)
+- [Quick Start](#-quick-start)
+- [Local Development](#-local-development)
+- [Testing](#-testing)
+- [Filesystem Layout](#-filesystem-layout)
+
+---
+
+## 🗺️ System Architecture
+
+```mermaid
+flowchart TB
+    CLI[cli: cobra tree] --> CFG[config: TOML + env + profiles]
+    CLI --> TG[tg: accounts, login, premium, proxy dialers]
+    TG <--> GOTD[gotd/td MTProto Layer 228]
+
+    subgraph PLAN["Scan & filter"]
+      SCAN[scan: scope resolve, incremental walker]
+      FILTERS[filters: ~150 dimensions]
+    end
+
+    CLI --> SCAN
+    SCAN -->|filters.Context| FILTERS
+    FILTERS -->|"pushdown: InputMessagesFilter*"| GOTD
+
+    subgraph DL["Store & download"]
+      STORE[(store: SQLite WAL)]
+      DLN[download: ranged pool, .part resume]
+      PACE[pace: jitter, FloodWait park]
+    end
+
+    SCAN --> STORE
+    STORE --> DLN
+    DLN -->|throttle| PACE
+    DLN --> FS[(files + per-chat manifests)]
+
+    TG -.->|"webproxy://"| WP[webproxy: tproxy v1 carrier] -.-> GOTD
 ```
 
-**Via `go install`** (private repo: needs GOPRIVATE + git auth over SSH):
+Request flow — what one `teleparse dl` run does:
 
-```bash
-# one-shot, no global git config changes (env-scoped URL rewrite):
-GOPRIVATE=github.com/4q4r/* \
-GIT_CONFIG_COUNT=1 \
-GIT_CONFIG_KEY_0='url.git@github.com:.insteadOf' \
-GIT_CONFIG_VALUE_0='https://github.com/' \
-go install github.com/4q4r/teleparse/cmd/teleparse@latest
+1. The CLI resolves configuration (flags > env > profile > file > defaults)
+   and API credentials (`TELEPARSE_API_ID`/`TELEPARSE_API_HASH` env or
+   `~/.config/teleparse/credentials.toml`).
+2. The session connects through the effective proxy (or direct), detects
+   Telegram Premium state (cached 24 h per account) and sizes the per-DC
+   connection pool accordingly.
+3. The takeout decision runs: with `takeout_auto = true` (the default), a
+   scope estimated at ≥ `takeout_auto_min_chats` (default 50) chats wraps the
+   session in Telegram's export mode; `--takeout` forces it, `--no-takeout`
+   disables it. The export session finishes with the run.
+4. Chat specs (`all` · `@username` · `t.me/...` · numeric id · `saved` ·
+   glob) are resolved through the dialog cache and deduplicated by chat id,
+   so overlapping specs never walk twice.
+5. A per-chat freshness probe runs: the dialogs page carries each chat's
+   newest message id for free; if it dropped below the cached watermark the
+   chat was mass-cleared and is re-walked in full. Chats whose last
+   successful walk is younger than `scan.rewalk_min_age` (default `10m`)
+   settle instantly from cache.
+6. The incremental walker asks Telegram only for messages past each chat's
+   watermark. Filters with a server pushdown (`InputMessagesFilter*` classes,
+   date bounds) shrink every page; remaining predicates evaluate client-side
+   against `filters.Context`.
+7. New matches merge into the per-chat manifest, together with cached pending
+   rows that still owe a download (discovered, queued or failed on any
+   earlier run — even with different filters).
+8. The paced worker pool transfers each file as a sequential stream of ranged
+   512 KiB requests over pooled per-DC MTProto connections, resuming at the
+   exact on-disk `.part` offset and retrying failed chunks with exponential
+   backoff. `FloodWait` ≤ `flood_sleep_threshold` auto-sleeps; longer waits
+   park the run for `teleparse resume`.
+9. Completed files land once in the hardlink blob store
+   (`<root>/.teleparse/blobs/`) and are hardlinked into each chat's templated
+   path; manifests, metadata, optional SHA-256 and `post_download` hooks run
+   per file.
+10. Run-end hooks fire: `--notify-webhook` posts a JSON summary (also on
+    flood-wait park), and `verify`/`dedupe` can sweep the result offline.
+
+---
+
+## 📂 Project Structure
+
+```text
+teleparse/
+├── cmd/
+│   └── teleparse/                single entry point wiring the command tree
+├── internal/
+│   ├── cli/                      cobra commands, run orchestration, progress UI
+│   ├── config/                   TOML + env + profiles, XDG paths, credentials
+│   ├── tg/                       gotd gateway: sessions, login, premium, dialers
+│   ├── transport/                carrier-failure classification for retries
+│   ├── scan/                     scope resolution, incremental history walker
+│   ├── filters/                  options model + predicate compiler (~150 dims)
+│   ├── download/                 paced pipeline: templating, .part resume, hooks
+│   ├── store/                    SQLite WAL: manifest, watermarks, runs
+│   ├── pace/                     jitter, concurrency semaphore, flood parking
+│   ├── webproxy/                 WEB-proxy v1 (tproxy) carrier client
+│   ├── verify/                   offline integrity sweep + native format checks
+│   ├── notify/                   run-outcome webhooks
+│   ├── export/                   manifest export to JSONL / CSV
+│   └── testutil/                 shared test helpers
+│       └── tlmock/               in-memory Telegram API mock
+├── docs/specs/                   design documents
+├── .github/workflows/            CI (lint, test, integration, build) + release
+├── .golangci.yml                 strict lint config (~70 linters, 0 findings)
+├── .goreleaser.yml               cross-platform release pipeline
+├── Makefile                      build / lint / test / check targets
+├── CHANGELOG.md
+└── CONTRIBUTING.md
 ```
 
-Installs into `$(go env GOPATH)/bin` (usually `~/go/bin` — make sure it is on
-`PATH`). Permanent alternative: `git config --global url."git@github.com:".insteadOf "https://github.com/"`
-or `gh auth setup-git` for HTTPS credentials, then plain
-`GOPRIVATE=github.com/4q4r/* go install github.com/4q4r/teleparse/cmd/teleparse@latest`.
+---
 
-**From source** (no network fetch beyond the clone):
+## 🧩 Core Modules
 
-```bash
-git clone git@github.com:4q4r/teleparse.git && cd teleparse
-make build          # CGO_ENABLED=0 static binary → ./teleparse
-go install ./cmd/teleparse   # or straight into ~/go/bin
-```
+| Module | Purpose | Key surface |
+| :-- | :-- | :-- |
+| `cli` | Command tree, run orchestration, live progress UI | 18 commands; 105 flags on `dl` |
+| `config` | TOML + env + profile config, XDG paths, credential resolution | `config.toml`, `credentials.toml`, `TELEPARSE_*` |
+| `tg` | gotd gateway: multi-account sessions, login, premium detect, proxy dialers | `auth`, dialogs, contacts |
+| `transport` | Classifies carrier failures (dead proxy tunnels, truncated streams) for retry decisions | internal |
+| `scan` | Resolves chat scopes, walks history incrementally, applies server pushdown | internal |
+| `filters` | Single options model for flags/config/profiles; compiles to pushdown + predicates | `--explain`, ~150 dimensions |
+| `download` | Paced worker pool, ranged transfer, `.part` resume, collision policy, hooks | internal |
+| `store` | SQLite WAL persistence: media manifest, watermarks, run bookkeeping | `state.db` |
+| `pace` | Jittered inter-download delays, concurrency semaphore, flood-wait parking | internal |
+| `webproxy` | WEB-proxy v1 (tproxy) client as a gotd resolver | `webproxy://` URLs |
+| `verify` | Offline manifest-vs-disk sweep, native archive validation | `verify --deep` / `--fix` |
+| `notify` | Best-effort run-outcome webhooks (run end, flood park) | `--notify-webhook` |
+| `export` | Renders manifest rows as JSONL or CSV | `export jsonl\|csv` |
+| `testutil/tlmock` | In-memory Telegram API mock for tests | internal |
 
-Releases are cut by [GoReleaser](https://goreleaser.com) on every `v*` tag
-(`.github/workflows/release.yml`).
+---
 
-- [The one-liner this was built for](#the-one-liner-this-was-built-for)
-- [Commands](#commands)
-- [Filter reference](#filter-reference)
-- [Configuration](#configuration)
-- [Speed](#speed)
-- [Proxies](#proxies)
-- [WEB-proxy v1](#web-proxy-v1)
-- [Anti-ban](#anti-ban)
-- [Incremental runs](#incremental-runs)
-- [State, resume, dedup](#state-resume-dedup)
-- [Architecture](#architecture)
-- [Development](#development)
-- [Limitations](#limitations)
-- [Contributing](#contributing)
-- [License](#license)
+## 🔎 Filters
 
-## Quickstart
+The filter engine lives in `internal/filters`: one options model drives CLI
+flags, config keys and TOML profiles, and compiles into a server pushdown
+plan plus client-side predicates. `dl`, `scan`, `sync` and `get` expose
+**105 flags** covering ~150 combinable dimensions; families compose with AND,
+and every flag has a config-key twin.
 
-```bash
-# credentials from https://my.telegram.org: export them once
-export TELEPARSE_API_ID=123456
-export TELEPARSE_API_HASH=abcdef1234567890abcdef1234567890
-# (or skip the exports: `teleparse auth login` asks for them and can save
-#  them to ~/.config/teleparse/credentials.toml, 0600)
+| Family | Flags (examples) |
+| :-- | :-- |
+| Media type | `--media photo,video,video-note,voice,audio,document,sticker,gif` · `--exclude-media` (skips listed kinds; **overrides** `--media` matches) · `--sticker-kind animated` · `--has-media=false` · `--in-album only` |
+| File metadata | `--mime application/zip` / `video/*` · `--exclude-mime` · `--ext .zip` · `--exclude-ext .mp4` · `--name '*.zip'` · `--name-regex` · `--min/max-size 20MB` (**before** download) · `--min/max-duration 30s` · `--min/max-width/height` · `--min-mp 2` · `--streamable` · `--video-nosound` |
+| Text & entities | `--text-regex` · `--has-text only\|none` · `--hashtag news` · `--any-hashtag` · `--text-mention @user` · `--was-mentioned` (notification ≠ text!) · `--has-url` · `--url-regex` · `--has-email` · `--has-phone` · `--command /start` · `--emoji-only` |
+| Dates | `--from-date 2026-01-01\|7d` · `--until-date` · `--last 7d` · `--older-than 30d` · `--edited` |
+| Forwards | `--forwarded` · `--fwd-from @channel` · `--fwd-hidden` · `--fwd-date-from/to` |
+| Engagement | `--is-reply` · `--min-views` · `--min-forwards` · `--min-reactions` · `--reaction 🔥` · `--pinned` |
+| Chat | `--chat-type private,group,supergroup,channel,forum` · `--exclude-chat-type` · `--chat-glob 'News*'` · `--chat-regex` · `--archived only` · `--saved` · `--chat-username` · `--chat-deleted=true` · `--skip-protected` |
+| Sender | `--sender-contacts` · `--sender-non-contacts` · `--sender-mutual` / `--sender-non-mutual` · `--from-me` · `--from @user,123,+15551234567` (ids \| usernames \| phones) · `--exclude` (same syntax) · `--sender-bot/premium/verified/scam/deleted` · `--sender-name-regex` · `--sender-username-regex` · `--sender-phone-regex` |
+| Chat age | `--chat-min-age 1y` — only chats with messages older than the cutoff; costs one probe RPC per chat (private chats expose no creation date) |
+| IDs & misc | `--min-id/--max-id` · `--service only` · `--silent` · `--spoiler` |
+| Execution | `--limit` (scan budget per chat) · `--reverse` · `--dedupe hardlink\|unique-id\|hash\|off` · `--skip-existing` · `--order date\|id` |
 
-teleparse auth login                     # phone → code → 2FA (session in ~/.config/teleparse)
-teleparse auth login --qr                # QR login: approve from Telegram on another device
-teleparse auth login --account spare     # second account; use --account spare|all anywhere
-teleparse chats list --type private      # see what's accessible
-teleparse scan all --media photo --last 7d           # dry-run: plan only
-teleparse dl @durov --media video --min-size 5MB     # real download
-teleparse sync all                       # incremental, watermark-based
-```
+Sizes: `500`, `10KB`, `20MB`, `1.5GiB`; durations `30s`/`10m`; dates ISO-8601
+or relative `7d`/`12h`/`2w`.
 
-## The one-liner this was built for
+**Exclude semantics.** Every `--exclude-*` family evaluates *after* its
+include twin: a file or chat matching both is dropped, and an exclude alone
+(no include set) acts as pure negation — everything except the listed values
+passes.
 
-> "only zip archives under 20 MB from personal chats of people in my contacts"
+**Pushdown.** Whenever a filter combination maps onto a Telegram
+`InputMessagesFilter*` class or date bounds, the walker pushes it to the
+server so fewer pages and smaller pages cross the wire; everything else
+evaluates client-side. `--explain` prints exactly which filters push down,
+which run locally, and the known server quirks that apply to your
+combination — then proceeds with the run.
+
+The one-liner this was built for:
 
 ```bash
 teleparse dl --chat-type private --sender-contacts --media document \
   --mime application/zip --max-size 20MB --explain
 ```
 
-`--explain` prints exactly which filters are pushed down to Telegram's servers
-(`InputMessagesFilter*`, date bounds) and which run client-side — plus known
-server quirks that apply to your combination.
+> "only zip archives under 20 MB from personal chats of people in my contacts"
 
-## Commands
+---
 
-| Command | Purpose |
-|---|---|
-| Takeout | auto-engaged on large scans (`takeout_auto`, threshold `takeout_auto_min_chats = 50`), `--takeout` force / `--no-takeout` disable; export session finishes with the run |
-| `--full` on `dl`/`scan`/`sync` | force one complete re-walk of every chat, ignoring cached watermarks |
-| `auth login \| logout \| status \| list` | multi-account sessions (0600, flock, stable device identity) |
-| `auth login --qr [--timeout 5m]` | QR-code login: scan with Telegram on another device (auto-refreshing token) |
-| `auth login --import-telethon session.sqlite` | migrate a Telethon session's auth key |
-| `auth login --import-tdesktop <tdata-dir>` | migrate a Telegram Desktop tdata account (pick interactively if several) |
-| `chats list \| show` | dialogs with types/usernames/protected flags |
-| `scan [CHATS] [FILTERS]` | `dl --dry-run`: writes manifest, downloads nothing |
-| `dl [CHATS] [FILTERS]` | download; `--account a,b\|all`, `--takeout`, `--count-only`, `--no-routing` (bypass `accounts.routing` for one run) |
-| `get [LINKS]... [FILTERS]` | one-shot fetch of specific messages by t.me link, id list or range; `--group` (default) expands albums, `--from-export` ingests a Telegram Desktop export (see below); every dl flag (`--dry-run`, `--count-only`, `--takeout`, filters) applies |
-| `sync [CHATS]` | incremental via per-chat watermarks (cron-friendly) |
-| `resume [RUN_ID]` | resume runs parked by FloodWait or interrupted |
-| `runs list \| show \| clean` | run history |
-| `profile save \| list \| show \| rm` | named filter presets in config |
-| `export jsonl \| csv` | manifest export |
-| `stats` | per-chat totals |
-| `verify [CHATS]` | offline integrity sweep of manifest vs disk; `--deep` adds native archive validation, `--fix` repairs |
-| `dedupe stats \| gc` | inspect the hardlink blob store; `gc` removes blobs whose last copy is gone |
-| `proxy show \| test` | proxy config and DC probe (DCs 2-5) |
-| `ping [--dc N\|all]` | connect time + RPC RTT to Telegram DCs via the session |
-| `doctor` | config/creds/disk/DB/proxy diagnostics + premium status |
+## 📥 Downloads & Dedup
 
-Chat specs: `all` · `@username` · `t.me/...` link · numeric id · `saved` · glob (`"News*"`).
+**Ranged transfer engine.** Every file downloads as a sequential stream of
+ranged 512 KiB requests over a pooled set of MTProto connections per data
+center (default 3, max 8). Files know their DC from the manifest; unknown DCs
+start on the home pool and follow a `FILE_MIGRATE` answer to the right one.
+A resumed `.part` file continues at the exact on-disk offset — no byte is
+ever re-downloaded. Failed chunks retry with exponential backoff
+(`pacing.retry_max`, default 4). `[download] threads` is accepted for
+compatibility only; the per-file transfer is sequential and throughput scales
+with `connections` and `pacing.concurrency`. Beyond ~20 connections per DC
+Telegram answers `FLOOD_PREMIUM_WAIT` (an account-level throttle lifted by
+Telegram Premium) — short waits auto-sleep and show as `throttled Ns` in the
+live UI.
 
-Global flags:
+**Hardlink blob store (default dedup).** The same Telegram file sighted in N
+chats downloads exactly once into
+`<root>/.teleparse/blobs/<class>/<id><ext>` and is **hardlinked** into each
+chat's templated path — zero extra network, zero extra disk for repeats. A
+hardlink *is* the file (same inode), so deleting any subset of copies never
+breaks the survivors. On filesystems without hardlink support the link
+degrades to a byte copy (counted as `link_copies`). `teleparse dedupe stats`
+reports blob usage; `dedupe gc` unlinks blobs whose last consumer is gone.
 
-| Flag | Purpose |
-|---|---|
-| `--format table\|json\|plain` | output format for `chats list`, `runs list\|show`, `stats`, `proxy show\|test`, `ping`, `auth list` (stable JSON field names; `plain` = greppable `key: value` lines) |
-| `--no-ascii` | plain ASCII output: line-per-item progress instead of the live redraw UI, ASCII-only tables and bars (also disables colors) |
-| `--no-color` | disable colored output; identical to `NO_COLOR=1`. Colors are on only when stdout is a terminal and none of `--no-color` / `--no-ascii` / `NO_COLOR` applies — the systemd/docker/plain-pipe cases always get plain output |
+**Naming and metadata.** `[output]` controls where and how files land:
 
-## Getting specific messages (`get`)
+| Key | Values |
+| :-- | :-- |
+| `template` | `{chat}/{date:%Y-%m}/{filename}` — `{chat}`, `{date}`, `{sender}`, `{filename}` |
+| `naming` | `original` (keep Telegram names) \| `msgid` (`<msgID>_<index><ext>`) |
+| `collision` | `index` \| `overwrite` \| `skip` |
+| `metadata` | `chat` (one `manifest.json` per chat dir) \| `file` (legacy per-file sidecar) \| `off` |
+| `rewrite_ext` | rename mismatched extensions to the canonical one for the recorded mime type |
 
-`get` is the one-shot fetcher: it takes t.me message links instead of chat
-specs, resolves each chat through the same dialog cache `dl` uses, fetches
-the explicit message ids (`channels.getMessages` for channels,
-`messages.getMessages` otherwise) and runs the exact dl pipeline on the
-result — filters, manifest, preview, downloads, dedupe. It never touches
-per-chat watermarks, so later incremental walks still cover everything.
+**Verify: offline integrity with repair.** `teleparse verify` works fully
+offline against the manifest and the downloads tree — no session, no network:
 
-Link grammar (mix and match; same-chat links merge):
+| Class | Meaning |
+| :-- | :-- |
+| `ok` | final path present, size matches the manifest |
+| `missing` | final path **and** blob are gone |
+| `final-missing-blob-alive` | only the blob survives — repairable offline |
+| `size-mismatch` | on-disk size drifted from the recorded size |
+| `hash-mismatch` | (`--deep`) SHA-256 re-hash differs from the recorded digest |
+| `format-error` | (`--deep`) native archive validation failed |
+| `unchecked-format` | (`--deep`) extension has no native validator — a coverage note, never a failure |
+| `orphan-blob` | blob-store bytes no manifest row references |
+| `row-without-path` | queued/failed rows without a path — counted, skipped |
 
-| Form | Example | Meaning |
-|---|---|---|
-| `t.me/<user>/<id>` (+ `https://`, `telegram.me`) | `https://t.me/news/100` | message 100 of @news |
-| id list / range | `t.me/news/100,102` · `t.me/news/100-200` | explicit ids (ranges expand; max span 10000) |
-| private channel | `t.me/c/123456/789` | message 789 of internal channel 123456 |
-| forum topic path | `t.me/forum/7/89` · `t.me/c/123456/7/89` | message 89 inside topic 7 (getReplies context) |
-| comment thread | `t.me/news/500?thread=550` · `?comment=550` | comment 550 under post 500 (getReplies context) |
-| tg scheme | `tg://resolve?domain=news&post=100` | message 100 of @news |
-| `t.me/<user>` (no id) | — | rejected: `get` is message-scoped; use `dl` for whole chats |
+`--deep` validates archive formats **natively with the Go standard library —
+no external ffmpeg/ffprobe/unrar**:
 
-Albums: a fetched message with a `grouped_id` triggers one sibling fetch
-(`id±9`, same group kept — Telegram albums hold at most ten items), so a
-single link to one photo of a ten-shot album downloads all ten.
-`--group=false` disables it. All filters apply on top
-(`teleparse get t.me/news/100-200 --media photo --min-size 1MB`).
+| Format | Check |
+| :-- | :-- |
+| `.zip` | `archive/zip` full walk — every member decompressed, per-member CRC32 verified |
+| `.tar.gz` / `.tgz` / `.gz` | `compress/gzip` full decompress (CRC32 + ISIZE), tar headers walked when present |
+| `.rar` | honest **lite** check: RAR4/RAR5 signature plus best-effort end-of-archive marker |
+| other | size check only (`unchecked-format`) |
 
-### `--from-export`: adopt a Telegram Desktop export
+`--fix` repairs what it safely can: `final-missing-blob-alive` rows are
+re-hardlinked from the live blob, `missing`/`size-mismatch`/`hash-mismatch`
+rows are requeued for the next `dl`, orphan blobs go through the
+`dedupe gc` path. `format-error` rows are never auto-repaired — corrupted
+bytes need a human decision. Exit code is non-zero while problems remain.
 
-```shell
-teleparse get --from-export ~/ChatExport_2026-09-06/result.json
-teleparse get --from-export result.json --chat @news --dry-run
-```
+---
 
-Ingests a Desktop-export `result.json` as a download manifest: every
-file-bearing message becomes a manifest row keyed by the export's own chat
-identity (or `--chat` to override; `--media-dir` when the media lives
-elsewhere). **Adoption**: files already on disk under the export directory
-are hardlinked (byte-copied only across filesystems) into the blob store
-and the final path, hashed immediately and marked done — no re-download.
-Only absent files (or size mismatches) queue for download; the command
-prints `adopted N, queued M`. Filters apply to export rows too (media kind,
-size, extension, date — fields the export cannot know, like sender, stay
-unset and pass). Caveat: export rows carry deterministic pseudo media ids,
-so a later full walk of the same chat may re-fetch a file an export
-import already adopted.
-
-## Authentication
-
-Telegram API credentials (`api_id` / `api_hash`) are resolved once per run,
-highest first:
-1. `TELEPARSE_API_ID` + `TELEPARSE_API_HASH` environment variables
-2. `~/.config/teleparse/credentials.toml` (0600, dir 0700):
-
-```toml
-[app]
-api_id = 123456
-api_hash = "0123456789abcdef0123456789abcdef"
-```
-
-`teleparse auth login` on a terminal asks for missing credentials
-(numeric id, hidden 32-hex hash, up to three attempts each) and offers to
-write that file for future runs. Without a terminal the failure prints the
-exact exports to set plus the `auth login` alternative, so scripted and
-container runs stay actionable. `doctor` reports the resolved source
-(`env` or `file`) and never prompts.
-
-| Method | Command | Notes |
-|---|---|---|
-| Phone + code + 2FA password | `teleparse auth login [--phone +15551234567]` | full interactive flow; the 2FA password is prompted only when the account has one; SRP is handled by gotd |
-| QR code | `teleparse auth login --qr [--timeout 5m]` | approve from Telegram on another device: Settings → Devices → Link Desktop Device; the token auto-refreshes on expiry; with `--no-ascii` or a non-TTY stderr only the clickable `tg://login?token=...` URL is printed |
-| Telethon session import | `teleparse auth login --import-telethon session.sqlite` | carries the auth key over; peer caches rebuild lazily |
-| Telegram Desktop tdata import | `teleparse auth login --import-tdesktop <tdata-dir>` | via gotd's tdesktop decoder; multiple stored accounts are listed for an interactive pick; passcode-protected tdata is not supported |
-
-All methods converge on the same per-account session store (`~/.config/teleparse/accounts/<name>/session.json`, 0600), so `--qr`, imports and phone login are interchangeable per account.
-
-## Filter reference
-
-Families (AND-composed; every flag has a config-key twin):
-
-| Family | Flags (examples) |
-|---|---|
-| Media type | `--media photo,video,video-note,voice,audio,document,sticker,gif` · `--exclude-media video` (skips listed kinds; **overrides** `--media` matches) · `--sticker-kind animated` · `--has-media=false` · `--in-album only` |
-| File metadata | `--mime application/zip` / `video/*` · `--exclude-mime image/*` · `--ext .zip` · `--exclude-ext .mp4` · `--name '*.zip'` · `--name-regex` · `--min/max-size 20MB` (**before** download) · `--min/max-duration 30s` · `--min/max-width/height` · `--min-mp 2` · `--streamable` · `--video-nosound` |
-| Text & entities | `--text-regex` · `--has-text only\|none` · `--hashtag news` · `--any-hashtag` · `--text-mention @user` · `--was-mentioned` (notification ≠ text!) · `--has-url` · `--url-regex` · `--has-email` · `--has-phone` · `--command /start` · `--emoji-only` |
-| Dates | `--from-date 2026-01-01\|7d` · `--until-date` · `--last 7d` · `--older-than 30d` · `--edited` |
-| Forwards | `--forwarded` · `--fwd-from @channel` · `--fwd-hidden` · `--fwd-date-from/to` |
-| Engagement | `--is-reply` · `--min-views` · `--min-forwards` · `--min-reactions` · `--reaction 🔥` · `--pinned` |
-| Chat | `--chat-type private,group,supergroup,channel,forum` · `--exclude-chat-type channel` · `--chat-glob 'News*'` · `--chat-regex` · `--archived only` · `--saved` · `--chat-username` · `--chat-deleted=true` · `--skip-protected` |
-| Sender | `--sender-contacts` · `--sender-non-contacts` (inverse) · `--sender-mutual` · `--sender-non-mutual` (inverse) · `--from-me` · `--from @user,123,+15551234567` (ids \| @usernames \| phone numbers) · `--exclude` (same syntax) · `--sender-bot/premium/verified/scam/deleted` · `--sender-name-regex` |
-| Chat age | `--chat-min-age 1y` (chats with messages older than the cutoff; one probe RPC per chat — private chats expose no creation date) |
-| IDs & misc | `--min-id/--max-id` · `--service only` · `--silent` · `--spoiler` |
-| Execution | `--limit` (scan budget) · `--reverse` · `--dedupe hardlink\|unique-id\|hash\|off` · `--skip-existing` · `--recurse-topics` · `--follow-replies N` · `--albums expand\|first\|skip` |
-
-Sizes: `500`, `10KB`, `20MB`, `1.5GiB`; durations `30s`/`10m`; dates ISO-8601 or relative `7d`/`12h`/`2w`.
-
-Every `--exclude-*` family evaluates **after** its include twin: a file or chat
-matching both is dropped, and an exclude alone (no include set) acts as pure
-negation — everything except the listed values passes.
-
-### Selecting chats
-
-Scan targets accept **multiple specs in one command**, each expanded and
-deduplicated by chat id, so overlaps never walk twice:
-
-```bash
-teleparse dl @durov t.me/telegram 123456789 saved --media photo
-```
-
-Spec forms: `@username`, bare `name`, `t.me/...` links, numeric ids
-(`-100...` channel prefixes tolerated) and the keywords `all` (every dialog,
-prefiltered by your chat filters) and `saved` (Saved Messages). Numeric ids
-resolve through the local dialog cache — run `teleparse chats list` first to
-warm it.
-
-### Deleted accounts
-
-OFTG-style exports mark deleted peers and stop there; against the live API the
-picture is different: after an account is deleted the **dialog remains
-walkable by numeric id** (resolution via the dialog cache still works), while
-its **username dies** — `@user` and `t.me/user` specs fail with
-`CHANNEL_PRIVATE`-style errors. Group and channel peers never count as
-"deleted"; the flag only applies to private-chat peers.
-
-```bash
-teleparse dl 123456789 --chat-deleted=true     # whole chat: peer is a deleted account
-teleparse dl all --sender-deleted=true          # per-message: deleted senders only
-```
-
-`--chat-deleted=false` inverts the scope (live peers only); unset means don't
-care. `teleparse chats list` shows the numeric ids you need once usernames
-are gone.
-
-## Configuration
-
-`~/.config/teleparse/config.toml` (auto-created; unknown keys **rejected**).
-Precedence: `flags > env (TELEPARSE_*) > profile > file > defaults`.
-
-```toml
-[auth]
-account = "default"
-
-[net]
-proxy  = ""          # socks5:// socks4:// http:// mtproto:// webproxy://
-takeout = false
-
-[pacing]
-concurrency          = 3     # parallel downloads
-delay_min, delay_max = 1.0, 4.0  # jittered pause between file starts (s)
-flood_sleep_threshold = 60   # ≤: auto-sleep, >: park run for `resume`
-requests_per_minute  = 0     # optional global token bucket
-retry_max            = 4
-
-[download]
-threads     = 4        # accepted for compatibility; per-file transfer is sequential
-connections = 3        # pooled MTProto connections per DC (1-8)
-premium_boost = true   # premium preset (connections 8) on auto-detected premium accounts
-
-[scan]
-incremental = true     # watermark-cached walks; --full overrides per run
-
-[accounts]             # both off by default; --account pins one account and skips both
-routing = { "@chat" = "spare", "123456" = "spare" } # per-chat account routing (spec → account)
-premium_preferred = false # oversized (2–4GiB) items defer to a local premium session
-
-[output]
-root      = ""                                # "" = ~/.local/share/teleparse/downloads
-template  = "{chat}/{date:%Y-%m}/{filename}"
-collision = "index"                           # index | overwrite | skip
-naming    = "original"                        # original | msgid (<msgID>_<index><ext>)
-metadata  = "chat"                            # chat | file | off (sidecar bool maps here)
-sidecar   = true                              # deprecated: metadata = "file"/"off"
-
-[filters]           # defaults; profiles overlay these
-dedupe = "hardlink" # hardlink | unique-id | hash | off
-
-[profiles.videos]
-media = ["video"]
-min_size = "5MB"
-```
-
-## Speed
-
-Downloads ride **real parallel connections**, not one multiplexed pipe:
-
-- `[download] connections` (1-8, default 3) — one MTProto connection pool per
-  data center, reused by every file routed there; files know their DC from the
-  manifest, unknown DCs start on the home pool and follow a `FILE_MIGRATE`
-  answer to the right pool automatically.
-- Every file transfers as a sequential stream of ranged 512 KiB requests that
-  resumes at the exact on-disk offset — a resumed `.part` file never
-  re-downloads its bytes. Each chunk request takes an idle pooled connection,
-  so concurrent files (see `[pacing] concurrency`) interleave across the pool;
-  `[download] threads` is accepted for compatibility and no longer drives the
-  engine.
-- Defaults mirror official clients (TDLib = 2 conns/DC); the **turbo preset**
-  for fat pipes is `connections = 6`. Never exceed ~20 connections
-  per DC: past that Telegram answers `FLOOD_PREMIUM_WAIT` — an account-level
-  throttle (Telegram Premium removes it). Short waits are auto-slept and shown
-  in the live UI as `throttled Ns`; only waits beyond `flood_sleep_threshold`
-  park the run.
-- **Premium autodetect**: with `premium_boost = true` (default), teleparse
-  detects Telegram Premium accounts on connect (cached 24h per account) and
-  upgrades the default connection sizing to the premium preset — 8 pooled
-  connections per DC — matching TDLib's premium download envelope and lifting
-  the account-level media throttle. Explicit `connections` you set
-  always wins; `auth status` and `doctor` show the detected state and its
-  source. Failed detection falls back to the cache (or non-premium) and never
-  blocks a download.
-- Progress UI: on a TTY `dl`/`sync` render a live per-file view (percent, bar,
-  speed, eta, totals); an active file with no byte progress for 10s renders a
-  `stalled` marker on its line; piped output falls back to one line per
-  finished file;
-  `-s`/`--silent` suppresses everything but errors and actionable results.
-  On `dl`/`scan`/`sync` the plain `--silent` long name stays the
-  silently-sent-messages filter — use `-s` there. `--no-ascii` forces the
-  line-per-item surface. The final summary counts retries
-  (`failed: N, retries: M`), and each failed item prints
-  `FAIL <name> (attempts N): <error>`.
-
-## Proxies
+## 🌐 Proxies & WEB-proxy v1
 
 | Scheme | Transport |
-|---|---|
+| :-- | :-- |
 | `socks5://user:pass@host:port` | SOCKS5 (auth supported) |
 | `socks4://host:port` | SOCKS4 (in-house dialer) |
 | `http://user:pass@host:port` | HTTP CONNECT (in-house dialer) |
 | `mtproto://host:port/<hex-secret>` | MTProto proxy; `dd`-padded and `ee` fake-TLS secrets both supported |
 | `webproxy://host:443/<secret>?carrier=websocket` | **WEB-proxy v1** (see below) |
 
-Rotate by changing `--proxy`/config and reconnecting — the session survives; **FloodWait does not**
-(it is bound to the account, not the IP). `teleparse proxy test` probes each scheme against the
-production DCs (connect time per DC); `teleparse ping` adds RPC RTT using the logged-in session.
+Rotate by changing `--proxy`/config and reconnecting — the session survives;
+**FloodWait does not** (it binds to the account, not the IP). `teleparse
+proxy test` probes each scheme against the production DCs (connect time per
+DC); `teleparse ping` adds RPC RTT using the logged-in session. Proxy
+precedence: `--proxy` flag > `TELEPARSE_PROXY` > standard environment
+(`HTTPS_PROXY`, `https_proxy`, `ALL_PROXY`, `all_proxy`) > config file;
+`net.ignore_env` skips only the standard variables.
 
-## WEB-proxy v1
-
-First client implementation of Telegram's new web-proxy protocol
-([tproxy-server](https://github.com/telegramdesktop/tproxy-server), Aug 2026): MTProto frames
-multiplexed (OPEN/DATA/WINDOW/CLOSE with credit-based flow control) over an HTTPS or WebSocket
-carrier that looks like ordinary browsing. Bootstrap: HMAC-SHA256 capability → bridge page →
-session token. Carriers: `websocket` / `websocket-lanes` (primary), `https` / `https-lanes`
-(fallback). Verified against the reference `tproxy-server` in integration tests
-(`-tags webproxy_integration`).
-
-## Anti-ban
-
-- Conservative defaults (3 parallel, 1–4 s jitter); token-bucket RPM optional.
-- `FloodWait ≤ threshold` → auto-sleep; longer → run **parked** with `resume_at`,
-  `teleparse resume` continues later.
-- `--takeout` wraps the session in Telegram's takeout mode — the sanctioned export path with
-  lower flood limits. Export sessions carry a per-account file cap (2GiB, or 4GiB with Telegram
-  Premium; picked up from the premium cache once detected): files above the cap fail fast with
-  `TAKEOUT_FILE_TOO_BIG` surfaced in FAIL lines and the summary.
-- Stable per-account device fingerprint (derived once, persisted, never drifts).
-- Sessions 0600, single-process flock, entity cache persisted (deleted channels: the server no
-  longer returns history — your local manifest is the recovery).
-
-## Per-chat account routing & premium fallback
-
-`[accounts]` (both features **off by default**) splits one `dl`/`scan`/`sync`
-invocation across accounts — same command, sequential sessions:
-
-- `routing = { "@chat" = "spare", "123456" = "spare" }` — a chat spec (username
-  or id, resolved like dl scope specs) mapped to an account is **excluded from
-  the default account's pass** and processed by a second client session of that
-  account after the default pass finishes (sessions are strictly sequential;
-  the per-account flock forbids concurrency anyway). Unknown routed accounts
-  fail at start with the known-account list, never mid-run. `get` and `resume`
-  ignore routing. Precedence: `--account` > routing; `--no-routing` bypasses it
-  for one run.
-- `premium_preferred = true` — items larger than the current session's file cap
-  but within the premium 4GiB cap (i.e. oversized for a non-premium 2GiB
-  account) are deferred to a final session of a local **Telegram Premium**
-  account (detected via the cached premium state) instead of failing. Without a
-  local premium session the oversized failure (with its cap reason) stays.
-
-## Incremental runs
-
-`scan`, `dl` and `sync` walk chats **incrementally by default**
-(`[scan] incremental = true`): each chat remembers the highest message id it
-was walked up to (a watermark), and the next run only asks Telegram for
-messages past it. A 10–16 minute full-history run becomes seconds on the
-second pass. The cache builds from the very first run of any mode.
-
-What is cached:
-
-- **Per-chat watermarks** — "history below id N has been walked". Advanced
-  after every successful walk (a chat with failed downloads keeps its old
-  watermark, so `dl`/`resume` re-walk and retry it).
-- **The media manifest** — every match ever recorded in the state DB, keyed
-  by Telegram's immutable media identity. Count-only and dry-run totals
-  include it (`matched 572 files (+318 cached)`); rows above the footer list
-  new matches only. Incremental `dl` runs re-offer manifest rows that still
-  owe a download (discovered by a scan, queued, failed) — including rows
-  from runs with different filters, because the manifest is per-chat.
-- **Walk freshness** (`[scan] rewalk_min_age`, default `"10m"`): a chat
-  whose last successful walk is younger than the window is not walked again
-  at all — not even the newest-id probe. A run restarted seconds after a
-  stop settles each recently-walked chat instantly as a settled progress
-  line with its cached match count, and its pending manifest downloads are
-  still served, instead of re-probing and re-paging all chats for nothing.
-  Chats never walked (no watermark) or older than the window walk normally.
-  `"0"` walks every chat on every run; the value is a relative duration
-  (`30s`, `10m`, `1h`).
-
-What invalidates it:
-
-- **History-clear detection**: the dialogs page carries each chat's newest
-  message id for free (explicit chat specs cost one extra `getHistory`
-  probe, only when a watermark exists). If the newest id dropped *below*
-  the watermark, the chat was mass-cleared: the watermark resets and the
-  chat is re-walked in full (`history cleared: <title> (re-walking)`).
-- **`--full`** on `dl`/`scan`/`sync` forces one complete re-walk of every
-  chat, ignoring the watermarks **and** the walk freshness window.
-  `[scan] incremental = false` makes every run a full walk.
-
-What is **not** detected (accepted trade-off): single old deletions and
-edits older than Telegram's 48-hour edit window never invalidate anything —
-media identities are immutable, so already-downloaded files stay correct;
-files deleted remotely only surface as failed downloads on runs that
-re-offer them. Manifest rows picked up without fresh walk context (no
-template fields like `{date}` available) land under
-`<chatID>/<msgID>_<index><ext>`.
-
-## State, resume, dedup
-
-SQLite (WAL) at `~/.local/share/teleparse/state.db`, separate from sessions: per-chat
-watermarks (`sync`), per-media rows with statuses/attempts/`bytes_done`, runs with park/resume.
-Downloads write `<file>.part` and complete via atomic rename; re-runs are idempotent
-(PK chat+message+index). Global dedup by stable Telegram file identity
-(`UNIQUE(media_class, media_id)`); optional SHA-256.
-
-### Hardlink dedupe (default)
-
-With `dedupe = "hardlink"` the same Telegram file sighted in N chats is downloaded
-exactly once into a canonical blob store under `<root>/.teleparse/blobs/<class>/<id><ext>`
-and **hardlinked** into each chat's templated path — zero extra network and zero extra
-disk for repeats. A hardlink *is* the file (same inode, N directory entries), so deleting
-any subset of the copies never breaks the survivors: data lives while at least one link
-exists. Delete every chat copy and the blob alone keeps the bytes; delete the blob itself
-and any surviving chat copy keeps the file (the next sighting re-downloads once into the
-blob and links from there). On filesystems without hardlink support the link degrades to
-a byte copy (counted as `link_copies` in the summary; warned once per run).
-
-`teleparse dedupe stats` reports blob count/bytes and tracked vs orphaned blobs;
-`teleparse dedupe gc` unlinks blobs whose link count is 1 — nothing references the data
-anymore, so the bytes are freed. Files are never touched, only the hidden blob store.
-
-### Verify: integrity sweep with repair
-
-`teleparse verify [CHATS]...` works fully offline against the manifest and the
-downloads tree — no session, no network. It stats every done row's final path and
-its canonical blob and classifies:
-
-| Class | Meaning |
-|---|---|
-| `ok` | final path present, size matches the manifest |
-| `missing` | final path **and** blob are gone |
-| `final-missing-blob-alive` | only the blob survives — repairable offline |
-| `size-mismatch` | on-disk size drifted from the recorded size |
-| `hash-mismatch` | (`--deep`) sha256 re-hash differs from the recorded digest |
-| `format-error` | (`--deep`) native archive validation failed |
-| `unchecked-format` | (`--deep`) extension has no native validator — a coverage note, never a failure |
-| `orphan-blob` | blob-store bytes no manifest row references |
-| `row-without-path` | queued/failed rows without a path — counted, skipped |
-
-`--deep` validates archive formats **natively with the Go standard library — no
-external ffmpeg/ffprobe/unrar**:
-
-| Format | Check |
-|---|---|
-| `.zip` | `archive/zip` full walk — every member is decompressed, per-member CRC32 verified |
-| `.tar.gz` / `.tgz` / `.gz` | `compress/gzip` full decompress (CRC32 + ISIZE verified), tar headers walked when the payload is a tar |
-| `.rar` | honest **lite** check: RAR4/RAR5 signature plus best-effort end-of-archive marker in the final bytes — member integrity is out of reach without external tooling |
-| other | size check only (`unchecked-format`) |
-
-`--fix` repairs what it safely can, offline: `final-missing-blob-alive` rows are
-re-hardlinked from the live blob (no network), `missing` / `size-mismatch` /
-`hash-mismatch` rows are requeued (`status=queued`, `attempts=0` — the same reset
-crash recovery uses) for the next `teleparse dl`, and orphan blobs go through the
-`dedupe gc` path (link-count-1 rule). `format-error` rows are **never**
-auto-repaired — corrupted bytes in place need a human decision.
-
-```console
-$ teleparse verify
-CLASS                 ROWS
-ok                    1204
-final-missing-blob-alive 3
-missing               1
-
-CHAT  MSG   CLASS                     FILE        DETAIL
--100… 8841  final-missing-blob-alive  photo.jpg   final path gone, blob alive
-…
-
-problems: 4, remaining: 4
-verify: 4 problem(s) remain (run with --fix to repair): integrity problems found
-```
-
-Exit code is non-zero while problems remain (after `--fix`, only what could not
-be repaired). Output honors `--format table|json|plain`; problems stream as
-one settled stderr line each, suppressed by `--silent`. Chat filters accept
-numeric ids or stored-title substrings (`teleparse verify 123 "News*"` — no
-globbing, plain substring), or `all` (the default).
-
-## Architecture
-
-```mermaid
-flowchart LR
-    CLI[cli: cobra tree] --> CFG[config: TOML+env+profiles]
-    CLI --> TG[tg: accounts, login, proxy dialers]
-    TG <--> GOTD[gotd/td MTProto]
-    CLI --> SCAN[scan: scope, walker, mapping]
-    SCAN -->|filters.Context| FILTERS[filters: ~90 predicate families]
-    FILTERS -->|Pushdown: InputMessagesFilter*| GOTD
-    SCAN --> STORE[(store: SQLite WAL)]
-    STORE --> DL[download: pool, .part resume, hooks]
-    DL -->|FloodWait| PACE[pace: jitter, park]
-    DL --> FS[(files + per-chat manifests)]
-    TG -. webproxy:// .-> WP[webproxy: tproxy v1 carrier] -.-> GOTD
-```
+**WEB-proxy v1** is a first client implementation of Telegram's new
+web-proxy protocol ([tproxy-server](https://github.com/telegramdesktop/tproxy-server),
+Aug 2026): MTProto frames multiplexed (OPEN/DATA/WINDOW/CLOSE with
+credit-based flow control) over an HTTPS or WebSocket carrier that looks like
+ordinary browsing. Bootstrap: HMAC-SHA256 capability → bridge page → session
+token. Carriers: `websocket` / `websocket-lanes` (primary), `https` /
+`https-lanes` (fallback). Verified against the reference `tproxy-server` in
+integration tests (`-tags webproxy_integration`).
 
 ```mermaid
 sequenceDiagram
@@ -600,38 +330,315 @@ sequenceDiagram
     R-->>C: DATA ← stream
 ```
 
-## Development
+---
 
-```bash
-go build ./...
-go vet ./...
-golangci-lint run ./...   # strict: 70+ linters, 0 findings required
-go test -race -count=1 ./...      # 728 tests, 11 packages
-govulncheck ./...
-go test -race -tags webproxy_integration ./internal/webproxy/...  # needs docker/git
-make cover                # coverage profile + per-function totals (coverage.out)
-make check                # fmt + lint + vet + test + vuln in one shot
-CGO_ENABLED=0 go build -ldflags "-X github.com/4q4r/teleparse/internal/cli.version=$(git describe --tags)" -o teleparse ./cmd/teleparse
+## 🛡️ Anti-ban & Accounts
+
+**Pacing.** Conservative defaults: 3 parallel downloads, 1–4 s jittered pause
+between file starts, optional global token bucket
+(`pacing.requests_per_minute`, 0 disables), per-file retries with exponential
+backoff (`retry_max = 4`).
+
+**FloodWait park/resume.** Waits ≤ `flood_sleep_threshold` (default 60 s)
+auto-sleep and keep going; longer waits **park** the run with a `resume_at`
+timestamp — `teleparse resume` (or `resume --all`) continues later exactly
+where it stopped, thanks to `.part` offsets and the manifest.
+
+**Auto-takeout.** Takeout mode is Telegram's sanctioned export path with
+lower flood limits. With `takeout_auto = true` (the default), scopes
+estimated at ≥ `takeout_auto_min_chats` (default 50) chats enter takeout
+automatically; the export session finishes with the run. Export sessions
+carry a per-account file cap — **2 GiB, or 4 GiB with Telegram Premium**
+(picked up from the premium cache once detected): oversized files fail fast
+with `TAKEOUT_FILE_TOO_BIG` in FAIL lines and the summary.
+
+**Premium autodetect.** With `premium_boost = true` (the default), teleparse
+detects Telegram Premium accounts on connect (cached 24 h per account) and
+upgrades the default connection sizing to the premium preset — 8 pooled
+connections per DC, matching TDLib's premium download envelope and lifting
+the account-level media throttle. Explicit `connections` you set always wins;
+`auth status` and `doctor` show the detected state. Failed detection falls
+back to the cache (or non-premium) and never blocks a download.
+
+**Per-chat account routing & premium fallback.** `[accounts]` (both features
+**off by default**) splits one `dl`/`scan`/`sync` invocation across accounts —
+same command, strictly sequential sessions (the per-account flock forbids
+concurrency anyway):
+
+- `routing = { "@chat" = "spare", "123456" = "spare" }` — a routed chat is
+  excluded from the default account's pass and processed by a second client
+  session of that account afterwards. Unknown routed accounts fail at start
+  with the known-account list, never mid-run. `get` and `resume` ignore
+  routing; `--account` pins one account and skips both; `--no-routing`
+  bypasses routing for one run.
+- `premium_preferred = true` — items larger than the current session's cap
+  but within the premium 4 GiB cap defer to a final session of a local
+  Telegram Premium account instead of failing oversized. Without a local
+  premium session the failure (with its cap reason) stays.
+
+**Freshness & history-clear detection.** `[scan] incremental = true` (the
+default) caches per-chat watermarks — repeat runs walk only new messages.
+`rewalk_min_age` (default `"10m"`; `"0"` disables) skips re-probing chats
+walked more recently than the window, so a restarted run settles instantly.
+If the dialogs page shows a chat's newest message id *below* its watermark,
+the chat was mass-cleared: the watermark resets and the chat re-walks in
+full. `--full` forces one complete re-walk of every chat.
+
+---
+
+## 🔌 Command Surface
+
+| Command | Purpose |
+| :-- | :-- |
+| `auth login \| logout \| status \| list` | multi-account sessions (0600, flock, stable device identity); `--qr` QR login, `--import-telethon`, `--import-tdesktop` |
+| `auth export` | export the raw session JSON (treat as a secret) |
+| `chats list \| show` | dialogs with types, usernames, protected flags |
+| `scan [CHATS] [FILTERS]` | `dl --dry-run`: writes manifest rows, downloads nothing |
+| `dl [CHATS] [FILTERS]` | download; `--dry-run`, `--count-only`, `--takeout`/`--no-takeout`, `--full`, `--no-routing`, `--notify-webhook`, `--rewrite-ext` |
+| `sync [CHATS]` | incremental via per-chat watermarks (cron-friendly) |
+| `get [LINKS]... [FILTERS]` | one-shot fetch by t.me link, id list or range (`t.me/news/100-200`, `t.me/c/.../789`, `?thread=`, `tg://resolve?...`); album grouping `--group` (default); `--from-export` adopts a Telegram Desktop export — on-disk files are hardlinked in, only absent ones queue |
+| `resume [RUN_ID]` | resume runs parked by FloodWait or interrupted; `--all` |
+| `runs list \| show \| clean` | run history |
+| `profile save \| list \| show \| rm` | named filter presets in config |
+| `export jsonl \| csv` | manifest export |
+| `stats` | download statistics per chat and totals |
+| `verify [CHATS]` | offline integrity sweep; `--deep` native validation, `--fix` repairs |
+| `dedupe stats \| gc` | inspect the hardlink blob store; `gc` frees unreferenced blobs |
+| `proxy show \| test` | proxy config and DC probe (DCs 2–5) |
+| `ping [--dc N\|all]` | connect time + RPC RTT to Telegram DCs via the session |
+| `doctor` | config/credentials/session/disk/database/proxy diagnostics + premium status |
+| `completion [shell]` | shell autocompletion scripts |
+
+Chat specs: `all` · `@username` · `t.me/...` link · numeric id · `saved` ·
+glob (`"News*"`); multiple specs per command, deduplicated by chat id.
+
+Global flags:
+
+| Flag | Purpose |
+| :-- | :-- |
+| `--account <name>` | account name (default from config) |
+| `--config <path>` | config file path (default `~/.config/teleparse/config.toml`) |
+| `--proxy <url>` | `socks5:// socks4:// http:// mtproto:// webproxy://` |
+| `--root <dir>` | downloads root (overrides config) |
+| `--format table\|json\|plain` | stable output format for `chats list`, `runs list\|show`, `stats`, `proxy show\|test`, `ping`, `auth list` |
+| `--no-ascii` | plain ASCII output: line-per-item progress, ASCII tables/bars |
+| `--no-color` | disable colors (also `NO_COLOR=1`, non-terminal stdout) |
+| `-s`, `--silent` | suppress progress UI and per-item lines (on `dl`/`scan`/`sync` use `-s`; plain `--silent` there filters silently-sent messages) |
+| `-v`, `--version` | version |
+
+---
+
+## ⚙️ Configuration
+
+`~/.config/teleparse/config.toml` (auto-created as a fully commented
+template on first run; unknown keys **rejected**). Precedence is strict:
+`flags > env (TELEPARSE_*) > profile > file > defaults`.
+
+Environment variable groups:
+
+- **Credentials:** `TELEPARSE_API_ID`, `TELEPARSE_API_HASH` (else
+  `credentials.toml`).
+- **Run overrides:** `TELEPARSE_ACCOUNT`, `TELEPARSE_PROXY`,
+  `TELEPARSE_TAKEOUT`, `TELEPARSE_CONCURRENCY`, `TELEPARSE_ROOT`,
+  `TELEPARSE_WEBHOOK`, `TELEPARSE_PROFILE`.
+- **Standard proxy env** (when no explicit override):
+  `HTTPS_PROXY`, `https_proxy`, `ALL_PROXY`, `all_proxy` — skip with
+  `net.ignore_env`.
+
+Full annotated `config.toml` (defaults shown):
+
+```toml
+[auth]
+account = "default"              # default account name
+
+[net]
+proxy = ""                       # socks5:// socks4:// http:// mtproto:// webproxy://
+ignore_env = false               # skip standard proxy env vars (TELEPARSE_PROXY still wins)
+takeout = false                  # always wrap session in takeout (export) mode
+takeout_auto = true              # engage takeout when a scan looks large
+takeout_auto_min_chats = 50      # estimated scope size that triggers auto takeout
+
+[pacing]
+concurrency = 3                  # parallel downloads
+delay_min = 1.0                  # jittered pause between file starts, seconds
+delay_max = 4.0
+flood_sleep_threshold = 60       # <=: auto-sleep; longer FloodWait parks the run
+requests_per_minute = 0          # global token bucket; 0 disables
+retry_max = 4                    # attempts per file (exponential backoff)
+
+[download]
+threads = 4                      # compatibility knob; no engine effect (transfer is sequential ranged)
+connections = 3                  # pooled MTProto connections per DC (1-8)
+premium_boost = true             # premium preset (connections 8) on auto-detected premium accounts
+
+[scan]
+incremental = true               # watermark-cached walks; --full overrides per run
+rewalk_min_age = "10m"           # per-chat walk freshness window; "0" = walk every run
+
+[accounts]                       # both features off by default
+routing = { "@chat" = "spare" }  # per-chat account routing (spec -> account)
+premium_preferred = false        # oversized (2-4 GiB) items defer to a local premium session
+
+[output]
+root = ""                        # "" = ~/.local/share/teleparse/downloads
+template = "{chat}/{date:%Y-%m}/{filename}"
+collision = "index"              # index | overwrite | skip
+naming = "original"              # original | msgid (<msgID>_<index><ext>)
+metadata = "chat"                # chat | file | off (sidecar bool maps here)
+sidecar = true                   # deprecated: maps to metadata = "file"/"off"
+part_suffix = ".part"            # in-progress suffix
+sha256 = false                   # hash after download
+rewrite_ext = false              # canonical extension for recorded mime type
+
+[run]
+notify_webhook = ""              # POST JSON run summary at run end / flood park
+
+[hooks]
+post_download = []               # run after each successful download; {path} templated
+
+[filters]                        # defaults; profiles overlay these
+dedupe = "hardlink"              # hardlink | unique-id | hash | off
+
+[filters.recursion]
+topics = true                    # recurse into forum topics
+albums = "expand"                # expand | first | skip
+
+[profiles.videos]                # named overlay: teleparse dl --profile videos
+media = ["video"]
+min_size = "5MB"
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development guide.
+---
 
-## Limitations
+## 🔒 Security
 
-- Deleted/private channels: once the server answers `CHANNEL_PRIVATE` no client can re-fetch
-  history — the local manifest and entity cache are the only recovery path.
-- Bandwidth-level download resume: gotd's public downloader re-transfers skipped ranges
-  (content-safe, not byte-optimal).
-- `--albums first` passes all album members per-message (coalescing happens at scan level).
-- Bandwidth-level `--or` predicate groups are not implemented; composition is AND (v1).
-- WEB-proxy is a frozen-v1 PoC protocol; expect drift — integration tests guard what's shipped.
+- **Session hygiene** — per-account sessions live at
+  `~/.config/teleparse/accounts/<name>/session.json` with `0600`
+  permissions inside a `0700` directory, guarded by a single-process
+  `flock` so two teleparse runs never share one session.
+- **Credentials** — API id/hash resolve from environment or
+  `~/.config/teleparse/credentials.toml` (`0600`, dir `0700`); `auth login`
+  writes the file only on explicit consent. `doctor` reports the resolved
+  source and never prompts.
+- **Stable device fingerprint** — each account derives a realistic client
+  fingerprint once, persists it and reuses it verbatim, so logins never
+  drift across machines or proxies.
+- **No secrets in the repository** — `.env`, `*.session`, `accounts/` and
+  `state.db*` are gitignored; `auth export` prints the raw session JSON and
+  labels it a secret.
+- **Proxy secrets** — proxy URLs may embed credentials; they are supplied
+  via flag, `TELEPARSE_PROXY` or config and are not written to the manifest
+  or downloaded metadata.
+- **Anti-lockdown defaults** — conservative pacing, takeout for large
+  scopes, and account-bound FloodWait handling (proxy rotation never
+  launders a throttle) keep archival runs inside Telegram's tolerance.
 
-## Contributing
+---
 
-PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md): dev setup, the gate
-(`make check`: fmt + lint + vet + test + vuln, lint must be 0 findings),
-conventional commits, and the `webproxy_integration` test tag.
+## 🚀 Quick Start
 
-## License
+### 1. Install
 
-[MIT](LICENSE) © 2026 teleparse contributors.
+Release binary (linux/amd64 one-liner; other platforms on the
+[Releases](https://github.com/4q4r/teleparse/releases) page with SHA-256
+`checksums.txt`):
+
+```bash
+curl -fsSL https://github.com/4q4r/teleparse/releases/latest/download/teleparse_Linux_x86_64 \
+  -o teleparse && chmod +x teleparse && ./teleparse -v
+```
+
+Via `go install` (private repo — GOPRIVATE + SSH auth, no global git config
+changes):
+
+```bash
+GOPRIVATE=github.com/4q4r/* \
+GIT_CONFIG_COUNT=1 \
+GIT_CONFIG_KEY_0='url.git@github.com:.insteadOf' \
+GIT_CONFIG_VALUE_0='https://github.com/' \
+go install github.com/4q4r/teleparse/cmd/teleparse@latest
+```
+
+From source:
+
+```bash
+git clone git@github.com:4q4r/teleparse.git && cd teleparse
+make build          # CGO_ENABLED=0 static binary → ./teleparse
+```
+
+### 2. First run
+
+```bash
+# 1. credentials from https://my.telegram.org (export, or let login prompt and save them)
+export TELEPARSE_API_ID=123456
+export TELEPARSE_API_HASH=abcdef1234567890abcdef1234567890
+
+teleparse auth login                # 2. phone → code → 2FA (or: --qr, --import-telethon, --import-tdesktop)
+teleparse chats list --type private # 3. see what's accessible (warms the dialog cache)
+teleparse scan all --media photo --last 7d --explain   # 4. dry-run: plan + pushdown report, no downloads
+teleparse dl @durov --media video --min-size 5MB       # 5. real download
+teleparse verify                    # 6. offline integrity sweep of what landed
+```
+
+Add a second account with `teleparse auth login --account spare`, then use
+`--account spare|all` anywhere — or map specific chats to it via
+`[accounts] routing`.
+
+---
+
+## 💻 Local Development
+
+`Makefile` targets:
+
+| Target | What it runs |
+| :-- | :-- |
+| `make build` | `CGO_ENABLED=0` static binary with version ldflags |
+| `make fmt` | `golangci-lint fmt` (gofumpt-class formatting) |
+| `make lint` | `golangci-lint run` — strict ~70-linter config, 0 findings required |
+| `make vet` | `go vet ./...` |
+| `make test` | `go test -race -count=1 ./...` |
+| `make cover` | coverage profile + per-function totals (`coverage.out`) |
+| `make vuln` | `govulncheck ./...` |
+| `make integration` | `go test -race -tags webproxy_integration ./internal/webproxy/...` (needs Docker) |
+| `make check` | fmt + lint + vet + test + vuln in one shot — the gate |
+| `make release-snapshot` | GoReleaser dry run |
+
+Requires Go 1.27+ (see `go.mod`), golangci-lint v2. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the full guide: dev setup, the gate,
+conventional commits and the `webproxy_integration` tag.
+
+---
+
+## ✅ Testing
+
+The gate (mirrors CI):
+
+```bash
+test -z "$(gofmt -l .)"
+go vet ./...
+go test -race -count=1 ./...          # 1357 tests across 14 packages
+PATH=$PATH:~/.local/bin golangci-lint run ./...   # strict config, 0 findings
+go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+go test -race -count=1 -tags webproxy_integration ./internal/webproxy/...  # Docker
+```
+
+Numbers as of this release: **1357 tests, 14 packages, all passing with
+`-race`**; golangci-lint strict configuration with **0 findings**. `.github/
+workflows/ci.yml` runs lint, vet, race tests, govulncheck, the WEB-proxy
+integration suite (against the reference `tproxy-server` via Docker) and a
+static build on every push and PR; releases are cut by GoReleaser on `v*`
+tags.
+
+---
+
+## 📁 Filesystem Layout
+
+| Path | Description |
+| :-- | :-- |
+| `~/.config/teleparse/config.toml` | main config (auto-created, annotated) |
+| `~/.config/teleparse/credentials.toml` | API id/hash (`0600`) |
+| `~/.config/teleparse/accounts/<name>/session.json` | per-account session (`0600`, flock-guarded) |
+| `~/.local/share/teleparse/state.db` | SQLite WAL: manifest, watermarks, runs |
+| `~/.local/share/teleparse/downloads/` | default downloads root (`output.root`) |
+| `<root>/.teleparse/blobs/<class>/<id><ext>` | hardlink blob store |
+| `<root>/<chat>/manifest.json` | per-chat download metadata (`metadata = "chat"`) |
